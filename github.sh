@@ -3,7 +3,7 @@
 
 
 GITHUB_USERNAME="samibr"
-GITHUB_TOKEN="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"
+#GITHUB_TOKEN="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"
 REPO="arch"
 
 git add .
