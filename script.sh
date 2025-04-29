@@ -3,13 +3,15 @@
 set -euo pipefail
 
 # === User Settings ===
-DISK="/dev/sda"                # Adjust if different
-HOSTNAME="arch-offline"
+DISK="/dev/vda"                # Adjust if different
+HOSTNAME="arch"
 USERNAME="sami"
-PASSWORD="yourpassword"        # Set safely or prompt later
-TIMEZONE="Europe/Paris"
+PASSWORD="sami1111"        # Set safely or prompt later
+TIMEZONE="Africa/Tunis"
 LOCALE="en_US.UTF-8"
 SQUASHFS="/run/archiso/bootmnt/arch/x86_64/airootfs.sfs"
+VMLINUZ="/run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux"
+INITRAMFS="/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img"
 
 # === Partitioning (BIOS + /home) ===
 echo "[*] Partitioning $DISK (MBR: BIOS boot)"
@@ -17,21 +19,21 @@ wipefs -af "$DISK"
 sgdisk --zap-all "$DISK"
 parted --script "$DISK" \
   mklabel msdos \
-  mkpart primary ext4 1MiB 50GiB \
-  mkpart primary ext4 50GiB 100%
+  mkpart primary ext4 1MiB 15GiB \
+  mkpart primary ext4 15GiB 100%
 
 echo "[*] Formatting partitions"
 mkfs.ext4 "${DISK}1" -L root
 mkfs.ext4 "${DISK}2" -L home
 
-echo "[*] Mounting partitions"
+echo "[*] Mounting partitions and Extracting from SquashFS"
 mount "${DISK}1" /mnt
-mkdir -p /mnt/home
-mount "${DISK}2" /mnt/home
 
 # === Extract root from SquashFS ===
 echo "[*] Extracting root filesystem from SquashFS"
 unsquashfs -d /mnt "$SQUASHFS"
+mount "${DISK}2" /mnt/home
+cp "$VMLINUZ" "$INITRAMFS" /mnt/boot
 
 # === Bind mounts for chroot ===
 echo "[*] Preparing chroot environment"
@@ -72,7 +74,7 @@ genfstab -U /mnt >> /mnt/etc/fstab
 
 # === Cleanup ===
 echo "[*] Unmounting and cleaning up"
-for d in run sys proc dev; do umount -R /mnt/$d || true; done
-umount -R /mnt
+for d in run sys proc dev; do umount -l /mnt/$d || true; done
+umount -l /mnt
 
 echo "[✔] Offline installation complete. Reboot and remove media."
