@@ -115,8 +115,7 @@ echo -e "${BOLD}${GREEN}\
   / _ \ | '__/ __| '_ \   | || '_ \/ __| __/ _` | | |/ _ \ '__|
  / ___ \| | | (__| | | |  | || | | \__ \ || (_| | | |  __/ |
 /_/   \_\_|  \___|_| |_| |___|_| |_|___/\__\__,_|_|_|\___|_|
-
-    ${RESET}\n"
+${RESET}\n"
 
 
 mapfile -t partition_array < <(lsblk -rpno NAME,SIZE,TYPE | awk '$3 == "part" {print $1}')
