@@ -266,7 +266,7 @@ echo "root:$userpass" | chpasswd
 # Create user and set passwords
 useradd -m -G wheel -s /bin/bash $username
 echo "$username:$userpass" | chpasswd
-echo "root:$rootpass" | chpasswd
+echo "root:$userpass" | chpasswd
 
 # Enable sudo for wheel group
 sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
