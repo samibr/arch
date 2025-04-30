@@ -9,22 +9,26 @@ USERNAME="sami"
 PASSWORD="sami1111"        # Set safely or prompt later
 TIMEZONE="Africa/Tunis"
 LOCALE="en_US.UTF-8"
+ENABLE_SWAPFILE=true       # Set to false to skip creating a swapfile
+SWAPFILE_SIZE="4G"         # Set your desired swapfile size
+
 SQUASHFS="/run/archiso/bootmnt/arch/x86_64/airootfs.sfs"
 VMLINUZ="/run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux"
 INITRAMFS="/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img"
 
 # === Partitioning (BIOS + /home) ===
-echo "[*] Partitioning $DISK (MBR: BIOS boot)"
-wipefs -af "$DISK"
-sgdisk --zap-all "$DISK"
-parted --script "$DISK" \
-  mklabel msdos \
-  mkpart primary ext4 1MiB 15GiB \
-  mkpart primary ext4 15GiB 100%
+#echo "[*] Partitioning $DISK (MBR: BIOS boot)"
+#wipefs -af "$DISK"
+#sgdisk --zap-all "$DISK"
+#parted --script "$DISK" \
+#  mklabel msdos \
+#  mkpart primary ext4 1MiB 15GiB \
+#  mkpart primary ext4 15GiB 100%
 
 echo "[*] Formatting partitions"
 mkfs.ext4 "${DISK}1" -L root
-mkfs.ext4 "${DISK}2" -L home
+#mkfs.ext4 "${DISK}2" -L home       # Format home partition
+e2label "${DISK}2" home || true     # keep home partition
 
 echo "[*] Mounting partitions and Extracting from SquashFS"
 mount "${DISK}1" /mnt
@@ -69,6 +73,20 @@ grub-mkconfig -o /boot/grub/grub.cfg
 
 # Enable essential services (optional)
 systemctl enable NetworkManager || true
+
+# Conditionally create swapfile
+if [ "$ENABLE_SWAPFILE" = true ]; then
+  if ! grep -q swap /etc/fstab; then
+    fallocate -l "$SWAPFILE_SIZE" /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    echo '/swapfile none swap defaults 0 0' >> /etc/fstab
+  fi
+fi
+
+# Remove liveuser if it exists
+id liveuser &>/dev/null && userdel -rf liveuser || true
 EOF
 
 # === Fstab ===
