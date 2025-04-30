@@ -238,7 +238,7 @@ cp "$VMLINUZ" "$INITRAMFS" /mnt/boot/
 
 # === Bind mounts for chroot ===
 echo "[*] Preparing chroot environment"
-for d in dev proc sys run; do mount --bind /$d /mnt/$d; done
+for d in dev proc sys run root; do mount --bind /$d /mnt/$d; done
 
 # === Post-install configuration in chroot ===
 echo "[*] Entering chroot and configuring system"
@@ -268,6 +268,7 @@ echo "root:$userpass" | chpasswd
 useradd -m -G wheel -s /bin/bash $username
 echo "$username:$userpass" | chpasswd
 echo "root:$userpass" | chpasswd
+chown -R "$username:$username" /home/"$username"
 
 # Enable sudo for wheel group
 sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
@@ -294,7 +295,6 @@ rm /usr/share/wayland-sessions/xfce-wayland.desktop
 rm -rf /home/"$username"/.emacs.d
 EOF
 
-exit
 
 
 # === Cleanup ===
@@ -304,4 +304,4 @@ umount -l /mnt
 
 print_info "[✔] Offline installation complete. Reboot and remove media."
 
-
+exit
