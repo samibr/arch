@@ -60,6 +60,9 @@ echo "root:$PASSWORD" | chpasswd
 # Enable sudo for wheel group
 sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
 
+# mkinitcpio
+mkinitcpio -c /etc/mkinitcpio.conf -g /boot/initramfs-linux.img
+
 # Install GRUB for BIOS
 grub-install --target=i386-pc --recheck "$DISK"
 grub-mkconfig -o /boot/grub/grub.cfg
