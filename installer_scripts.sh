@@ -112,8 +112,6 @@ vm_check () {
 echo -e "${BOLD}${GREEN}\
 ARCH INSTALLER
 ${RESET}\n"
-
-
 mapfile -t partition_array < <(lsblk -rpno NAME,SIZE,TYPE | awk '$3 == "part" {print $1}')
 
 
@@ -226,6 +224,9 @@ print_info "Copying system files to the root partition."
 
 unsquashfs -f -d /mnt "$SQUASHFS"
 
+if mount | grep -q "$home_partition"; then
+    umount "$home_partition"
+fi
 mount "$home_partition" /mnt/home
 
 cp "$VMLINUZ" "$INITRAMFS" /mnt/boot/
@@ -288,8 +289,9 @@ systemctl enable NetworkManager || true
 # Remove liveuser and its home directory if it exists
 userdel -rf liveuser 2>/dev/null || true
 
-# Remove xfce-wayland.desktop
+# Remove xfce-wayland.desktop and .emacs.d
 rm /usr/share/wayland-sessions/xfce-wayland.desktop
+rm -rf /home/"$username"/.emacs.d
 EOF
 
 exit
