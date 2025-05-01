@@ -69,6 +69,9 @@ sed -i "s/^#\s*$LOCALE/$LOCALE/" /etc/locale.gen
 locale-gen
 echo "LANG=$LOCALE" > /etc/locale.conf
 
+# Keyboard for the login manager
+echo "keyboard-layout=fr" >> /etc/lightdm/slick-greeter.conf
+
 # Create user and set passwords
 useradd -m -G wheel -s /bin/bash $USERNAME
 echo "$USERNAME:$PASSWORD" | chpasswd
@@ -101,8 +104,9 @@ if [ "$ENABLE_SWAPFILE" = true ]; then
   fi
 fi
 
-# Remove liveuser if it exists
+# Cleanup the system
 id liveuser &>/dev/null && userdel -rf liveuser || true
+rm /usr/share/wayland-sessions/xfce-wayland.desktop
 EOF
 
 # === Fstab ===
