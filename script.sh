@@ -9,6 +9,7 @@ USERNAME="sami"
 PASSWORD="sami1111"        # Set safely or prompt later
 TIMEZONE="Africa/Tunis"
 LOCALE="en_US.UTF-8"
+DO_PARTITIONING=false  # Set to false to skip partitioning and only format
 ENABLE_SWAPFILE=true       # Set to false to skip creating a swapfile
 SWAPFILE_SIZE="4G"         # Set your desired swapfile size
 
@@ -16,19 +17,31 @@ SQUASHFS="/run/archiso/bootmnt/arch/x86_64/airootfs.sfs"
 VMLINUZ="/run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux"
 INITRAMFS="/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img"
 
-# === Partitioning (BIOS + /home) ===
-#echo "[*] Partitioning $DISK (MBR: BIOS boot)"
-#wipefs -af "$DISK"
-#sgdisk --zap-all "$DISK"
-#parted --script "$DISK" \
-#  mklabel msdos \
-#  mkpart primary ext4 1MiB 15GiB \
-#  mkpart primary ext4 15GiB 100%
+
+
+if $DO_PARTITIONING; then
+  echo "[*] Partitioning $DISK (MBR: BIOS boot)"
+  wipefs -af "$DISK"
+  sgdisk --zap-all "$DISK"
+  parted --script "$DISK" \
+    mklabel msdos \
+    mkpart primary ext4 1MiB 15GiB \
+    mkpart primary ext4 15GiB 100%
+else
+  echo "[*] Skipping partitioning"
+fi
 
 echo "[*] Formatting partitions"
 mkfs.ext4 "${DISK}1" -L root
-#mkfs.ext4 "${DISK}2" -L home       # Format home partition
-e2label "${DISK}2" home || true     # keep home partition
+
+if $DO_PARTITIONING; then
+  mkfs.ext4 "${DISK}2" -L home
+else
+  echo "[*] Keeping existing /home partition"
+  e2label "${DISK}2" home || true
+fi
+
+
 
 echo "[*] Mounting partitions and Extracting from SquashFS"
 mount "${DISK}1" /mnt
@@ -73,6 +86,9 @@ grub-mkconfig -o /boot/grub/grub.cfg
 
 # Enable essential services (optional)
 systemctl enable NetworkManager || true
+systemctl enable ntpd || true
+systemctl enable systemd-zram-setup@zram0 || true
+
 
 # Conditionally create swapfile
 if [ "$ENABLE_SWAPFILE" = true ]; then
