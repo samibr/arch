@@ -70,7 +70,10 @@ locale-gen
 echo "LANG=$LOCALE" > /etc/locale.conf
 
 # Keyboard for the login manager
-echo "keyboard-layout=fr" >> /etc/lightdm/slick-greeter.conf
+cat > /etc/default/keyboard <<EOL
+XKBMODEL="pc105"
+XKBLAYOUT="fr"
+EOL
 
 # Create user and set passwords
 useradd -m -G wheel -s /bin/bash $USERNAME
