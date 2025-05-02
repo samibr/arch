@@ -3,22 +3,22 @@
 set -euo pipefail
 
 # === User Settings ===
-DISK="/dev/vda"                # Adjust if different
+DISK="/dev/vda"
 HOSTNAME="arch"
 USERNAME="sami"
-PASSWORD="sami1111"        # Set safely or prompt later
+PASSWORD="sami1111"
 TIMEZONE="Africa/Tunis"
 LOCALE="en_US.UTF-8"
-DO_PARTITIONING=false  # Set to false to skip partitioning and only format
-ENABLE_SWAPFILE=true       # Set to false to skip creating a swapfile
-SWAPFILE_SIZE="4G"         # Set your desired swapfile size
+FILESYSTEM="btrfs" # btrfs or ext4
+DO_PARTITIONING=false
+ENABLE_SWAPFILE=true
+SWAPFILE_SIZE="4G"
 
 SQUASHFS="/run/archiso/bootmnt/arch/x86_64/airootfs.sfs"
 VMLINUZ="/run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux"
 INITRAMFS="/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img"
 
-
-
+# === Partitioning ===
 if $DO_PARTITIONING; then
   echo "[*] Partitioning $DISK (MBR: BIOS boot)"
   wipefs -af "$DISK"
@@ -31,70 +31,98 @@ else
   echo "[*] Skipping partitioning"
 fi
 
-echo "[*] Formatting partitions"
-mkfs.ext4 "${DISK}1" -L root
+# === Filesystem Creation ===
+echo "[*] Formatting root partition as $FILESYSTEM"
+if [[ "$FILESYSTEM" == "btrfs" ]]; then
+  mkfs.btrfs -f -L root "${DISK}1"
+elif [[ "$FILESYSTEM" == "ext4" ]]; then
+  mkfs.ext4 "${DISK}1" -L root
+else
+  echo "Unsupported filesystem: $FILESYSTEM"
+  exit 1
+fi
 
 if $DO_PARTITIONING; then
-  mkfs.ext4 "${DISK}2" -L home
+  if [[ "$FILESYSTEM" == "btrfs" ]]; then
+    mkfs.btrfs -f -L home "${DISK}2"
+  else
+    mkfs.ext4 "${DISK}2" -L home
+  fi
 else
   echo "[*] Keeping existing /home partition"
   e2label "${DISK}2" home || true
 fi
 
+# === Btrfs Subvolumes (if applicable) ===
+if [[ "$FILESYSTEM" == "btrfs" ]]; then
+  echo "[*] Creating Btrfs subvolumes"
+  mount "${DISK}1" /mnt
+  btrfs subvolume create /mnt/@
+  btrfs subvolume create /mnt/@home
+  btrfs subvolume create /mnt/@snapshots
+  umount /mnt
 
-
-echo "[*] Mounting partitions and Extracting from SquashFS"
-mount "${DISK}1" /mnt
+  echo "[*] Mounting Btrfs subvolumes"
+  mount -o compress=zstd,subvol=@ "${DISK}1" /mnt
+  mkdir -p /mnt/home /mnt/.snapshots
+  mount -o compress=zstd,subvol=@home "${DISK}1" /mnt/home
+  mount -o compress=zstd,subvol=@snapshots "${DISK}1" /mnt/.snapshots
+else
+  mount "${DISK}1" /mnt
+  mount "${DISK}2" /mnt/home
+fi
 
 # === Extract root from SquashFS ===
 echo "[*] Extracting root filesystem from SquashFS"
 unsquashfs -d /mnt "$SQUASHFS"
-mount "${DISK}2" /mnt/home
 cp "$VMLINUZ" "$INITRAMFS" /mnt/boot
 
 # === Bind mounts for chroot ===
 echo "[*] Preparing chroot environment"
 for d in dev proc sys run; do mount --bind /$d /mnt/$d; done
 
+# === Fstab ===
+echo "[*] Generating fstab"
+genfstab -U /mnt >> /mnt/etc/fstab
+
+if [[ "$FILESYSTEM" == "btrfs" ]]; then
+  echo "[*] Adding .snapshots to fstab"
+  cat >> /mnt/etc/fstab <<EOL
+
+# Snapper snapshots
+LABEL=root /.snapshots btrfs subvol=@snapshots,compress=zstd 0 0
+EOL
+fi
+
 # === Post-install configuration in chroot ===
 echo "[*] Entering chroot and configuring system"
 arch-chroot /mnt /bin/bash <<EOF
-# Set hostname
 echo "$HOSTNAME" > /etc/hostname
 
-# Timezone and locale
 ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
 hwclock --systohc
 sed -i "s/^#\s*$LOCALE/$LOCALE/" /etc/locale.gen
 locale-gen
 echo "LANG=$LOCALE" > /etc/locale.conf
 
-# Keyboard for the login manager
 cat > /etc/default/keyboard <<EOL
 XKBMODEL="pc105"
 XKBLAYOUT="fr"
 EOL
 
-# Create user and set passwords
 useradd -m -G wheel -s /bin/bash $USERNAME
 echo "$USERNAME:$PASSWORD" | chpasswd
 echo "root:$PASSWORD" | chpasswd
-
-# Enable sudo for wheel group
 sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
 
-# mkinitcpio
 mkinitcpio -c /etc/mkinitcpio.conf -g /boot/initramfs-linux.img
 
-# Install GRUB for BIOS
 grub-install --target=i386-pc --recheck "$DISK"
 grub-mkconfig -o /boot/grub/grub.cfg
 
-# Enable essential services (optional)
 systemctl enable NetworkManager || true
 
-
-# Conditionally create swapfile
+# Swapfile
 if [ "$ENABLE_SWAPFILE" = true ]; then
   if ! grep -q swap /etc/fstab; then
     fallocate -l "$SWAPFILE_SIZE" /swapfile
@@ -105,14 +133,24 @@ if [ "$ENABLE_SWAPFILE" = true ]; then
   fi
 fi
 
-# Cleanup the system
-id liveuser &>/dev/null && userdel -rf liveuser || true
-rm /usr/share/wayland-sessions/xfce-wayland.desktop
-EOF
+# Snapper setup
+if [[ "$FILESYSTEM" == "btrfs" ]]; then
+  echo "[*] Installing and configuring Snapper"
+  pacman -Sy --noconfirm snapper
 
-# === Fstab ===
-echo "[*] Generating fstab"
-genfstab -U /mnt >> /mnt/etc/fstab
+  snapper -c root create-config /
+  mkdir -p /.snapshots
+  mount --bind /.snapshots /.snapshots
+
+  sed -i 's/^TIMELINE_CREATE=.*/TIMELINE_CREATE="yes"/' /etc/snapper/configs/root
+  sed -i 's/^NUMBER_LIMIT=.*/NUMBER_LIMIT="20"/' /etc/snapper/configs/root
+
+  snapper -c root create -d "Initial installation"
+fi
+
+id liveuser &>/dev/null && userdel -rf liveuser || true
+rm -f /usr/share/wayland-sessions/xfce-wayland.desktop
+EOF
 
 # === Cleanup ===
 echo "[*] Unmounting and cleaning up"
