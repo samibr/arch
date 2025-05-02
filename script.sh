@@ -92,8 +92,7 @@ grub-mkconfig -o /boot/grub/grub.cfg
 
 # Enable essential services (optional)
 systemctl enable NetworkManager || true
-systemctl enable ntpd || true
-systemctl enable systemd-zram-setup@zram0 || true
+systemctl enable systemd-zram-setup@zram0.service || true
 
 
 # Conditionally create swapfile
