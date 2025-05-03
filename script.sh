@@ -11,7 +11,7 @@ TIMEZONE="Africa/Tunis"
 LOCALE="en_US.UTF-8"
 DO_PARTITIONING=false  # Set to false to skip partitioning and only format
 ENABLE_SWAPFILE=true       # Set to false to skip creating a swapfile
-SWAPFILE_SIZE="4G"         # Set your desired swapfile size
+SWAPFILE_SIZE="2G"         # Set your desired swapfile size
 
 SQUASHFS="/run/archiso/bootmnt/arch/x86_64/airootfs.sfs"
 VMLINUZ="/run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux"
@@ -104,6 +104,12 @@ if [ "$ENABLE_SWAPFILE" = true ]; then
     echo '/swapfile none swap defaults 0 0' >> /etc/fstab
   fi
 fi
+
+# Configuring ZRAM
+cat > /etc/systemd/zram-generator.conf <<-EOL
+[zram0]
+zram-size = min(ram / 2, 8192)
+EOL
 
 # Cleanup the system
 id liveuser &>/dev/null && userdel -rf liveuser || true
