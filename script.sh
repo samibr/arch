@@ -49,6 +49,7 @@ fi
 
 log "Mounting root and home partitions"
 mount "${DISK}1" /mnt
+mkdir -p /mnt/home
 mount "${DISK}2" /mnt/home
 
 log "Extracting root filesystem from SquashFS"
