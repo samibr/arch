@@ -58,8 +58,8 @@ if $DO_PARTITIONING; then
   sgdisk --zap-all "$DISK"
   parted --script "$DISK" \
     mklabel msdos \
-    mkpart primary ext4 1MiB 15GiB \
-    mkpart primary ext4 15GiB 100%
+    mkpart primary ext4 1MiB 22GiB \
+    mkpart primary ext4 22GiB 100%
 else
   log "Skipping partitioning"
 fi
