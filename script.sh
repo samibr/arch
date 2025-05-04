@@ -117,13 +117,13 @@ EOL
 log "Creating mail directories"
 for provider in gmail zoho; do
   for d in accounts bodies cache certificates headers private tmp; do
-    mkdir -p ~/.local/share/mutt/"\$provider"/"\$d"
+    mkdir -p /home/"$USERNAME"/.local/share/mutt/"\$provider"/"\$d"
   done
 done
-mkdir -p ~/ScanTailor
+mkdir -p /home/"$USERNAME"/ScanTailor
 
 log "Cleaning up system"
-id liveuser &>/dev/null && userdel -rf liveuser || true
+#id liveuser &>/dev/null && userdel -rf liveuser || true
 rm /usr/share/wayland-sessions/xfce-wayland.desktop
 EOF
 
