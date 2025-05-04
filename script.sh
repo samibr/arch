@@ -4,6 +4,8 @@ set -euo pipefail
 
 # === Styling ===
 BOLD='\e[1m'
+GREEN='\e[92m'
+RED='\e[91m'
 YELLOW='\e[93m'
 RESET='\e[0m'
 
@@ -21,6 +23,30 @@ LOCALE="en_US.UTF-8"
 DO_PARTITIONING=false
 ENABLE_SWAPFILE=true
 SWAPFILE_SIZE="2G"
+
+
+# === Summary and Confirmation ===
+echo -e "${BOLD}${GREEN}=== Installation Summary ===${RESET}"
+echo -e "${BOLD}${YELLOW}Disk:            ${RESET}${DISK}"
+echo -e "${BOLD}${YELLOW}Hostname:        ${RESET}${HOSTNAME}"
+echo -e "${BOLD}${YELLOW}Username:        ${RESET}${USERNAME}"
+echo -e "${BOLD}${YELLOW}Timezone:        ${RESET}${TIMEZONE}"
+echo -e "${BOLD}${YELLOW}Locale:          ${RESET}${LOCALE}"
+echo -e "${BOLD}${YELLOW}Partitioning:    ${RESET}${DO_PARTITIONING}"
+echo -e "${BOLD}${YELLOW}Enable Swapfile: ${RESET}${ENABLE_SWAPFILE}"
+echo -e "${BOLD}${YELLOW}Swapfile Size:   ${RESET}${SWAPFILE_SIZE}"
+echo
+echo -e "${BOLD}${RED}WARNING: This will format and install Arch on ${DISK}${RESET}"
+echo -e "${BOLD}${RED}Root partition: ${DISK}1${RESET}"
+[[ "$DO_PARTITIONING" == true ]] && echo -e "${BOLD}${RED}Home partition: ${DISK}2${RESET}" || echo -e "${BOLD}${YELLOW}Note: Home partition will not be reformatted${RESET}"
+echo
+
+read -rp "$(echo -e ${BOLD}${GREEN}"Proceed with installation? (yes/[no]): "${RESET})" confirm
+if [[ "$confirm" != "yes" ]]; then
+  echo -e "${BOLD}${RED}Aborting installation.${RESET}"
+  exit 1
+fi
+
 
 SQUASHFS="/run/archiso/bootmnt/arch/x86_64/airootfs.sfs"
 VMLINUZ="/run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux"
@@ -49,11 +75,10 @@ fi
 
 log "Mounting root and home partitions"
 mount "${DISK}1" /mnt
-mkdir -p /mnt/home
-mount "${DISK}2" /mnt/home
 
 log "Extracting root filesystem from SquashFS"
 unsquashfs -d /mnt "$SQUASHFS"
+mount "${DISK}2" /mnt/home
 cp "$VMLINUZ" "$INITRAMFS" /mnt/boot
 
 log "Preparing chroot environment"
@@ -124,8 +149,9 @@ done
 mkdir -p /home/"$USERNAME"/ScanTailor
 
 log "Cleaning up system"
-#id liveuser &>/dev/null && userdel -rf liveuser || true
+id liveuser &>/dev/null && userdel -rf liveuser || true
 rm /usr/share/wayland-sessions/xfce-wayland.desktop
+chown -R "$USERNAME:$USERNAME" /home/"$username"
 EOF
 
 log "Generating fstab"
