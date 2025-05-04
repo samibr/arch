@@ -149,9 +149,11 @@ done
 mkdir -p /home/"$USERNAME"/ScanTailor
 
 log "Cleaning up system"
-id liveuser &>/dev/null && userdel -rf liveuser || true
+if id liveuser &>/dev/null; then
+  userdel -rf liveuser 2>/dev/null || true
+fi
 rm /usr/share/wayland-sessions/xfce-wayland.desktop
-chown -R "$USERNAME:$USERNAME" /home/"$username"
+chown -R "$USERNAME:$USERNAME" /home/"$USERNAME"
 EOF
 
 log "Generating fstab"
