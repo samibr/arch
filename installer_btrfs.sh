@@ -63,30 +63,20 @@ fi
 
 
 
-# Check if bios_grub partition exists
 if ! parted "$DISK" print | grep -q "bios_grub"; then
     echo "==> Creating BIOS boot partition..."
 
-    # Find the first free space after 1MiB to create bios_grub partition
-    START=$(parted "$DISK" unit MiB print free | awk '/Free Space/ && $2 > 1 {print int($1+0.5); exit}')
-    END=$((START + 2))  # 2MiB size
+    # Create 2MiB BIOS boot partition starting at 1MiB
+    parted --script "$DISK" mkpart primary 1MiB 3MiB
 
-    if [ -z "$START" ]; then
-        echo "ERROR: No free space found to create BIOS boot partition."
-        exit 1
-    fi
+    # Get the newly created partition number
+    BIOS_PART_NUM=$(parted "$DISK" print | awk '/^ / {print $1}' | head -n 1)
 
-    # Create partition at found free space
-    parted --script "$DISK" mkpart primary "${START}MiB" "${END}MiB"
-
-    # Get partition number of last partition
-    PART_NUM=$(parted "$DISK" print | tail -n 1 | awk '{print $1}')
-
-    parted --script "$DISK" set "$PART_NUM" bios_grub on
+    # Set bios_grub flag
+    parted --script "$DISK" set "$BIOS_PART_NUM" bios_grub on
 else
     echo "==> BIOS boot partition already exists, skipping creation."
 fi
-
 
 
 
