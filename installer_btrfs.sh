@@ -206,6 +206,7 @@ if id liveuser &>/dev/null; then
 fi
 rm /usr/share/wayland-sessions/xfce-wayland.desktop
 chown -R "$USERNAME:$USERNAME" /home/"$USERNAME"
+chown -R "$USERNAME:$USERNAME" /data
 EOF
 
 log "Generating fstab"
