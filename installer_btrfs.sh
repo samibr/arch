@@ -88,6 +88,7 @@ fi
 echo "==> Creating fresh @ and @home subvolumes..."
 btrfs subvolume create "$MOUNTPOINT/@"
 btrfs subvolume create "$MOUNTPOINT/@home"
+btrfs subvolume create "$MOUNTPOINT/@boot"
 
 # Preserve or recreate @data depending on DO_PARTITIONING
 if $DO_PARTITIONING; then
@@ -106,6 +107,8 @@ umount "$MOUNTPOINT"
 
 echo "==> Mounting final subvolumes..."
 mount -o compress=zstd,subvol=@ "$PARTITION" "$MOUNTPOINT"
+mkdir -p "$MOUNTPOINT/boot"
+mount -o noatime,subvol=@boot "$PARTITION" "$MOUNTPOINT/boot"
 
 log "Extracting root filesystem from SquashFS"
 unsquashfs -d /mnt "$SQUASHFS"
