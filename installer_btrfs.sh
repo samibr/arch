@@ -15,13 +15,14 @@ log() {
 
 # === User Settings ===
 DISK="/dev/vda"
+PARTITION="${DISK}1"   # Assuming only one partition
+MOUNTPOINT="/mnt"
 HOSTNAME="arch"
 USERNAME="sami"
 PASSWORD="sami1111"
 TIMEZONE="Africa/Tunis"
 LOCALE="en_US.UTF-8"
 DO_PARTITIONING=false
-FORMAT_HOME=false  # Set to true to format /home
 ENABLE_SWAPFILE=true
 SWAPFILE_SIZE="2G"
 
@@ -33,7 +34,6 @@ echo -e "${BOLD}${YELLOW}Username:        ${RESET}${USERNAME}"
 echo -e "${BOLD}${YELLOW}Timezone:        ${RESET}${TIMEZONE}"
 echo -e "${BOLD}${YELLOW}Locale:          ${RESET}${LOCALE}"
 echo -e "${BOLD}${YELLOW}Partitioning:    ${RESET}${DO_PARTITIONING}"
-echo -e "${BOLD}${YELLOW}Format /home:    ${RESET}${FORMAT_HOME}"
 echo -e "${BOLD}${YELLOW}Enable Swapfile: ${RESET}${ENABLE_SWAPFILE}"
 echo -e "${BOLD}${YELLOW}Swapfile Size:   ${RESET}${SWAPFILE_SIZE}"
 echo
@@ -50,41 +50,65 @@ SQUASHFS="/run/archiso/bootmnt/arch/x86_64/airootfs.sfs"
 VMLINUZ="/run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux"
 INITRAMFS="/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img"
 
+
+# If full partitioning is requested
 if $DO_PARTITIONING; then
-  log "Partitioning $DISK (MBR: BIOS boot)"
-  wipefs -af "$DISK"
-  sgdisk --zap-all "$DISK"
-  parted --script "$DISK" \
-    mklabel msdos \
-    mkpart primary btrfs 1MiB 100%
+    echo "==> Wiping disk and creating new partition..."
+    umount -R "$MOUNTPOINT" || true
+    wipefs -a "$DISK"
+    parted --script "$DISK" mklabel gpt
+    parted --script "$DISK" mkpart primary btrfs 0% 100%
+    mkfs.btrfs -f "$PARTITION"
+fi
+
+echo "==> Mounting disk temporarily..."
+mount "$PARTITION" "$MOUNTPOINT"
+
+echo "==> Deleting @ and @home subvolumes if they exist..."
+btrfs subvolume delete "$MOUNTPOINT/@"     || true
+btrfs subvolume delete "$MOUNTPOINT/@home" || true
+
+echo "==> Creating fresh @ and @home subvolumes..."
+btrfs subvolume create "$MOUNTPOINT/@"
+btrfs subvolume create "$MOUNTPOINT/@home"
+
+# Preserve or recreate @data depending on DO_PARTITIONING
+if $DO_PARTITIONING; then
+    echo "==> Creating new @data subvolume..."
+    btrfs subvolume delete "$MOUNTPOINT/@data" || true
+    btrfs subvolume create "$MOUNTPOINT/@data"
 else
-  log "Skipping partitioning"
+    if ! btrfs subvolume list "$MOUNTPOINT" | grep -q "path @data"; then
+        echo "==> Creating @data subvolume (not found)..."
+        btrfs subvolume create "$MOUNTPOINT/@data"
+    else
+        echo "==> Keeping existing @data subvolume."
+    fi
 fi
 
-log "Formatting partition with Btrfs"
-mkfs.btrfs -f "${DISK}1" -L archroot
+umount "$MOUNTPOINT"
 
-log "Creating Btrfs subvolumes"
-mount "${DISK}1" /mnt
-btrfs subvolume create /mnt/@
-if $FORMAT_HOME; then
-  btrfs subvolume create /mnt/@home
-fi
-umount /mnt
+echo "==> Mounting final subvolumes..."
+mount -o compress=zstd, subvol=@ "$PARTITION" "$MOUNTPOINT"
+#mkdir -p "$MOUNTPOINT/home"
+#mount -o subvol=@home "$PARTITION" "$MOUNTPOINT/home"
+mkdir -p "$MOUNTPOINT/data"
+mount -o subvol=@data "$PARTITION" "$MOUNTPOINT/data"
 
-log "Mounting subvolumes"
-mount -o compress=zstd,subvol=@ "${DISK}1" /mnt
+echo "==> Layout mounted successfully:"
+findmnt -R "$MOUNTPOINT"
 
-if $FORMAT_HOME; then
-  mkdir -p /mnt/home
-  mount -o compress=zstd,subvol=@home "${DISK}1" /mnt/home
-else
-  mkdir -p /mnt/home
-  mount "${DISK}1" /mnt/home  # Assumes home data exists in main volume
-fi
+echo "==> Done. Root and home formatted. Data preserved unless partitioned."
+
+
+
+
+
 
 log "Extracting root filesystem from SquashFS"
 unsquashfs -d /mnt "$SQUASHFS"
+
+mount -o subvol=@home "$PARTITION" "$MOUNTPOINT/home"
 cp "$VMLINUZ" "$INITRAMFS" /mnt/boot
 
 log "Preparing chroot environment"
