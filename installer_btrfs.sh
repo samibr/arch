@@ -61,12 +61,28 @@ if $DO_PARTITIONING; then
     mkfs.btrfs -f "$PARTITION"
 fi
 
+
+
+if ! parted "$DISK" print | grep -q "bios_grub"; then
+    echo "==> Creating BIOS boot partition..."
+    parted --script "$DISK" mkpart primary 1MiB 2MiB
+    parted --script "$DISK" set 1 bios_grub on
+else
+    echo "==> BIOS boot partition already exists, skipping creation."
+fi
+
+
 echo "==> Mounting disk temporarily..."
 mount "$PARTITION" "$MOUNTPOINT"
 
 echo "==> Deleting @ and @home subvolumes if they exist..."
-btrfs subvolume delete "$MOUNTPOINT/@"     || true
-btrfs subvolume delete "$MOUNTPOINT/@home" || true
+if btrfs subvolume list "$MOUNTPOINT" | grep -q "path @\$"; then
+    btrfs subvolume delete "$MOUNTPOINT/@"
+fi
+
+if btrfs subvolume list "$MOUNTPOINT" | grep -q "path @home\$"; then
+    btrfs subvolume delete "$MOUNTPOINT/@home"
+fi
 
 echo "==> Creating fresh @ and @home subvolumes..."
 btrfs subvolume create "$MOUNTPOINT/@"
@@ -75,7 +91,6 @@ btrfs subvolume create "$MOUNTPOINT/@home"
 # Preserve or recreate @data depending on DO_PARTITIONING
 if $DO_PARTITIONING; then
     echo "==> Creating new @data subvolume..."
-    btrfs subvolume delete "$MOUNTPOINT/@data" || true
     btrfs subvolume create "$MOUNTPOINT/@data"
 else
     if ! btrfs subvolume list "$MOUNTPOINT" | grep -q "path @data"; then
