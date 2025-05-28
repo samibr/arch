@@ -62,14 +62,14 @@ if $DO_PARTITIONING; then
 fi
 
 
+
 if ! parted "$DISK" print | grep -q "bios_grub"; then
-    echo "==> Creating BIOS boot partition..."
-    parted --script "$DISK" unit s mkpart primary 2048 6143
+    echo "==> Creating BIOS boot partition in gap between sector 34 and 2047..."
+    parted --script "$DISK" unit s mkpart primary 34 2047
     parted --script "$DISK" set 1 bios_grub on
 else
     echo "==> BIOS boot partition already exists, skipping creation."
 fi
-
 
 
 
