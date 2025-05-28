@@ -63,13 +63,15 @@ fi
 
 
 
+
 if ! parted "$DISK" print | grep -q "bios_grub"; then
     echo "==> Creating BIOS boot partition..."
-    parted --script "$DISK" mkpart primary 1MiB 2MiB
+    parted --script "$DISK" mkpart primary 1MiB 3MiB
     parted --script "$DISK" set 1 bios_grub on
 else
     echo "==> BIOS boot partition already exists, skipping creation."
 fi
+
 
 
 echo "==> Mounting disk temporarily..."
