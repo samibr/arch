@@ -66,14 +66,14 @@ fi
 if ! parted "$DISK" print | grep -q "bios_grub"; then
     echo "==> Creating BIOS boot partition..."
 
-    # Create 2MiB BIOS boot partition starting at 1MiB
-    parted --script "$DISK" mkpart primary 1MiB 3MiB
+    # Ensure GPT label (optional if already set)
+    parted --script "$DISK" mklabel gpt
 
-    # Get the newly created partition number
-    BIOS_PART_NUM=$(parted "$DISK" print | awk '/^ / {print $1}' | head -n 1)
+    # Create a small BIOS boot partition, starting at 1MiB
+    parted --script "$DISK" mkpart bios_grub 1MiB 3MiB
 
-    # Set bios_grub flag
-    parted --script "$DISK" set "$BIOS_PART_NUM" bios_grub on
+    # Set the bios_grub flag (assumes it's partition 1)
+    parted --script "$DISK" set 1 bios_grub on
 else
     echo "==> BIOS boot partition already exists, skipping creation."
 fi
