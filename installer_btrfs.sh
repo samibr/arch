@@ -85,6 +85,11 @@ if btrfs subvolume list "$MOUNTPOINT" | grep -q "path @home\$"; then
     btrfs subvolume delete "$MOUNTPOINT/@home"
 fi
 
+if btrfs subvolume list "$MOUNTPOINT" | grep -q "path @boot\$"; then
+    btrfs subvolume delete "$MOUNTPOINT/@boot"
+fi
+
+
 echo "==> Creating fresh @ and @home subvolumes..."
 btrfs subvolume create "$MOUNTPOINT/@"
 btrfs subvolume create "$MOUNTPOINT/@home"
@@ -107,12 +112,12 @@ umount "$MOUNTPOINT"
 
 echo "==> Mounting final subvolumes..."
 mount -o compress=zstd,subvol=@ "$PARTITION" "$MOUNTPOINT"
-mkdir -p "$MOUNTPOINT/boot"
-mount -o noatime,subvol=@boot "$PARTITION" "$MOUNTPOINT/boot"
 
 log "Extracting root filesystem from SquashFS"
 unsquashfs -d /mnt "$SQUASHFS"
 
+
+mount -o noatime,subvol=@boot "$PARTITION" "$MOUNTPOINT/boot"
 mount -o compress=zstd,subvol=@home "$PARTITION" "$MOUNTPOINT/home"
 mkdir -p "$MOUNTPOINT/data"
 mount -o compress=zstd,subvol=@data "$PARTITION" "$MOUNTPOINT/data"
