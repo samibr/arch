@@ -24,7 +24,7 @@ TIMEZONE="Africa/Tunis"
 LOCALE="en_US.UTF-8"
 DO_PARTITIONING=false
 ENABLE_SWAPFILE=true
-SWAPFILE_SIZE="2G"
+SWAPFILE_SIZE="2048M"
 
 # === Summary and Confirmation ===
 echo -e "${BOLD}${GREEN}=== Installation Summary ===${RESET}"
@@ -166,15 +166,25 @@ grub-mkconfig -o /boot/grub/grub.cfg
 log "Enabling NetworkManager"
 systemctl enable NetworkManager || true
 
+
+
 if [ "$ENABLE_SWAPFILE" = true ]; then
   log "Creating swapfile"
+
   if ! grep -q swap /etc/fstab; then
-    fallocate -l "$SWAPFILE_SIZE" /swapfile
+    # Disable CoW and create swapfile using dd
+    touch /swapfile
+    chattr +C /swapfile
+
+    # Use SWAPFILE_SIZE directly 
+    dd if=/dev/zero of=/swapfile bs=1M count=${SWAPFILE_SIZE%M} status=progress
+
     chmod 600 /swapfile
     mkswap /swapfile
     swapon /swapfile
   fi
 fi
+
 
 log "Configuring ZRAM"
 cat > /etc/systemd/zram-generator.conf <<-EOL
