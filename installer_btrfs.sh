@@ -62,21 +62,14 @@ if $DO_PARTITIONING; then
 fi
 
 
-
 if ! parted "$DISK" print | grep -q "bios_grub"; then
     echo "==> Creating BIOS boot partition..."
-
-    # Ensure GPT label (optional if already set)
-    parted --script "$DISK" mklabel gpt
-
-    # Create a small BIOS boot partition, starting at 1MiB
-    parted --script "$DISK" mkpart bios_grub 1MiB 3MiB
-
-    # Set the bios_grub flag (assumes it's partition 1)
+    parted --script "$DISK" unit s mkpart primary 2048 6143
     parted --script "$DISK" set 1 bios_grub on
 else
     echo "==> BIOS boot partition already exists, skipping creation."
 fi
+
 
 
 
