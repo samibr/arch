@@ -89,11 +89,14 @@ fi
 umount "$MOUNTPOINT"
 
 echo "==> Mounting final subvolumes..."
-mount -o compress=zstd, subvol=@ "$PARTITION" "$MOUNTPOINT"
-#mkdir -p "$MOUNTPOINT/home"
-#mount -o subvol=@home "$PARTITION" "$MOUNTPOINT/home"
+mount -o compress=zstd,subvol=@ "$PARTITION" "$MOUNTPOINT"
+
+log "Extracting root filesystem from SquashFS"
+unsquashfs -d /mnt "$SQUASHFS"
+
+mount -o compress=zstd,subvol=@home "$PARTITION" "$MOUNTPOINT/home"
 mkdir -p "$MOUNTPOINT/data"
-mount -o subvol=@data "$PARTITION" "$MOUNTPOINT/data"
+mount -o compress=zstd,subvol=@data "$PARTITION" "$MOUNTPOINT/data"
 
 echo "==> Layout mounted successfully:"
 findmnt -R "$MOUNTPOINT"
@@ -102,13 +105,6 @@ echo "==> Done. Root and home formatted. Data preserved unless partitioned."
 
 
 
-
-
-
-log "Extracting root filesystem from SquashFS"
-unsquashfs -d /mnt "$SQUASHFS"
-
-mount -o subvol=@home "$PARTITION" "$MOUNTPOINT/home"
 cp "$VMLINUZ" "$INITRAMFS" /mnt/boot
 
 log "Preparing chroot environment"
