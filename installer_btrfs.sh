@@ -93,7 +93,6 @@ fi
 echo "==> Creating fresh @ and @home subvolumes..."
 btrfs subvolume create "$MOUNTPOINT/@"
 btrfs subvolume create "$MOUNTPOINT/@home"
-btrfs subvolume create "$MOUNTPOINT/@boot"
 
 # Preserve or recreate @data depending on DO_PARTITIONING
 if $DO_PARTITIONING; then
@@ -117,7 +116,6 @@ log "Extracting root filesystem from SquashFS"
 unsquashfs -d /mnt "$SQUASHFS"
 
 
-mount -o noatime,subvol=@boot "$PARTITION" "$MOUNTPOINT/boot"
 mount -o compress=zstd,subvol=@home "$PARTITION" "$MOUNTPOINT/home"
 mkdir -p "$MOUNTPOINT/data"
 mount -o compress=zstd,subvol=@data "$PARTITION" "$MOUNTPOINT/data"
@@ -129,7 +127,7 @@ echo "==> Done. Root and home formatted. Data preserved unless partitioned."
 
 
 
-cp "$VMLINUZ" "$INITRAMFS" /mnt/boot
+cp "$VMLINUZ" "$INITRAMFS" "$MOUNTPOINT/boot"
 
 log "Preparing chroot environment"
 for d in dev proc sys run; do mount --bind /$d /mnt/$d; done
