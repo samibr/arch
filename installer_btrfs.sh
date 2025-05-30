@@ -125,7 +125,7 @@ echo "==> Done. Root and home formatted. Data preserved unless partitioned."
 
 mount "$BOOT_PART" "$MOUNTPOINT/boot"
 
-cp "$VMLINUZ" "$INITRAMFS" "$BOOT_PART"
+cp "$VMLINUZ" "$INITRAMFS" "$MOUNTPOINT/boot"
 
 log "Preparing chroot environment"
 for d in dev proc sys run; do mount --bind /$d "$MOUNTPOINT/$d"; done
