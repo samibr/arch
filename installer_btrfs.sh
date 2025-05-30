@@ -54,7 +54,7 @@ INITRAMFS="/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img"
 
 
 if $DO_PARTITIONING; then
-  echo "==> Wiping disk and creating new partitions..."
+  log "Wiping disk and creating new partitions..."
   umount -R "$MOUNTPOINT" || true
   wipefs -a "$DISK"
   parted --script "$DISK" mklabel msdos
@@ -74,7 +74,7 @@ fi
 
 
 
-echo "==> Mounting disk temporarily..."
+log "Mounting disk temporarily and creating subvolumes"
 mount "$ROOT_PART" "$MOUNTPOINT"
 
 echo "==> Deleting @ and @home subvolumes if they exist..."
@@ -107,7 +107,7 @@ fi
 
 umount "$MOUNTPOINT"
 
-echo "==> Mounting final subvolumes..."
+log "Mounting final subvolumes..."
 mount -o compress=zstd,subvol=@ "$ROOT_PART" "$MOUNTPOINT"
 
 log "Extracting root filesystem from SquashFS"
