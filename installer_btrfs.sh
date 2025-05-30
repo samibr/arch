@@ -219,6 +219,6 @@ genfstab -U "$MOUNTPOINT" >> "$MOUNTPOINT/etc/fstab"
 
 log "Unmounting and cleaning up"
 for d in run sys proc dev; do umount -l "$MOUNTPOINT/$d" || true; done
-umount -l "$MOUNTPOINT$
+umount -l "$MOUNTPOINT"
 
 log "Offline installation complete. Reboot and remove media."
