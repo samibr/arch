@@ -15,7 +15,8 @@ log() {
 
 # === User Settings ===
 DISK="/dev/vda"
-PARTITION="${DISK}1"   # Assuming only one partition
+BOOT_PART="${DISK}1"
+ROOT_PART="${DISK}2"
 MOUNTPOINT="/mnt"
 HOSTNAME="arch"
 USERNAME="sami"
@@ -51,30 +52,30 @@ VMLINUZ="/run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux"
 INITRAMFS="/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img"
 
 
-# If full partitioning is requested
+
 if $DO_PARTITIONING; then
-    echo "==> Wiping disk and creating new partition..."
-    umount -R "$MOUNTPOINT" || true
-    wipefs -a "$DISK"
-    parted --script "$DISK" mklabel gpt
-    parted --script "$DISK" mkpart primary btrfs 0% 100%
-    mkfs.btrfs -f "$PARTITION"
+  echo "==> Wiping disk and creating new partitions..."
+  umount -R "$MOUNTPOINT" || true
+  wipefs -a "$DISK"
+  parted --script "$DISK" mklabel msdos
+  parted --script "$DISK" mkpart primary ext4 1MiB 513MiB   # /boot
+  parted --script "$DISK" mkpart primary btrfs 513MiB 100%  # /
+  parted --script "$DISK" set 1 boot on
+
+  mkfs.ext4 -F "${DISK}1"
+  mkfs.btrfs -f "${DISK}2"
 fi
 
-
-
-if ! parted "$DISK" print | grep -q "bios_grub"; then
-    echo "==> Creating BIOS boot partition in gap between sector 34 and 2047..."
-    parted --script "$DISK" unit s mkpart primary 34 2047
-    parted --script "$DISK" set 1 bios_grub on
-else
-    echo "==> BIOS boot partition already exists, skipping creation."
+if ! $DO_PARTITIONING; then
+  log "Formatting boot partition"
+  mkfs.ext4 -F "$BOOT_PART"
 fi
+
 
 
 
 echo "==> Mounting disk temporarily..."
-mount "$PARTITION" "$MOUNTPOINT"
+mount "$ROOT_PART" "$MOUNTPOINT"
 
 echo "==> Deleting @ and @home subvolumes if they exist..."
 if btrfs subvolume list "$MOUNTPOINT" | grep -q "path @\$"; then
@@ -85,9 +86,6 @@ if btrfs subvolume list "$MOUNTPOINT" | grep -q "path @home\$"; then
     btrfs subvolume delete "$MOUNTPOINT/@home"
 fi
 
-if btrfs subvolume list "$MOUNTPOINT" | grep -q "path @boot\$"; then
-    btrfs subvolume delete "$MOUNTPOINT/@boot"
-fi
 
 
 echo "==> Creating fresh @ and @home subvolumes..."
@@ -110,30 +108,30 @@ fi
 umount "$MOUNTPOINT"
 
 echo "==> Mounting final subvolumes..."
-mount -o compress=zstd,subvol=@ "$PARTITION" "$MOUNTPOINT"
+mount -o compress=zstd,subvol=@ "$ROOT_PART" "$MOUNTPOINT"
 
 log "Extracting root filesystem from SquashFS"
-unsquashfs -d /mnt "$SQUASHFS"
+unsquashfs -d "$MOUNTPOINT" "$SQUASHFS"
 
 
-mount -o compress=zstd,subvol=@home "$PARTITION" "$MOUNTPOINT/home"
+mount -o compress=zstd,subvol=@home "$ROOT_PART" "$MOUNTPOINT/home"
 mkdir -p "$MOUNTPOINT/data"
-mount -o compress=zstd,subvol=@data "$PARTITION" "$MOUNTPOINT/data"
+mount -o compress=zstd,subvol=@data "$ROOT_PART" "$MOUNTPOINT/data"
 
 echo "==> Layout mounted successfully:"
 findmnt -R "$MOUNTPOINT"
 
 echo "==> Done. Root and home formatted. Data preserved unless partitioned."
 
+mount "$BOOT_PART" "$MOUNTPOINT/boot"
 
-
-cp "$VMLINUZ" "$INITRAMFS" "$MOUNTPOINT/boot"
+cp "$VMLINUZ" "$INITRAMFS" "$BOOT_PART"
 
 log "Preparing chroot environment"
-for d in dev proc sys run; do mount --bind /$d /mnt/$d; done
+for d in dev proc sys run; do mount --bind /$d "$MOUNTPOINT/$d"; done
 
 log "Entering chroot and configuring system"
-arch-chroot /mnt /bin/bash -e <<EOF
+arch-chroot "$MOUNTPOINT" /bin/bash -e <<EOF
 log() {
   echo -e "${BOLD}${YELLOW}[*] \$1${RESET}"
 }
@@ -216,10 +214,11 @@ chown -R "$USERNAME:$USERNAME" /data
 EOF
 
 log "Generating fstab"
-genfstab -U /mnt >> /mnt/etc/fstab
+genfstab -U "$MOUNTPOINT" >> "$MOUNTPOINT/etc/fstab"
+
 
 log "Unmounting and cleaning up"
-for d in run sys proc dev; do umount -l /mnt/$d || true; done
-umount -l /mnt
+for d in run sys proc dev; do umount -l "$MOUNTPOINT/$d" || true; done
+umount -l "$MOUNTPOINT$
 
 log "Offline installation complete. Reboot and remove media."
