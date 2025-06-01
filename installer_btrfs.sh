@@ -62,13 +62,13 @@ if $DO_PARTITIONING; then
   parted --script "$DISK" mkpart primary btrfs 513MiB 100%  # /
   parted --script "$DISK" set 1 boot on
 
-  mkfs.ext4 -F "${DISK}1"
-  mkfs.btrfs -f "${DISK}2"
+  mkfs.ext4 -F -L BOOT "${DISK}1"
+  mkfs.btrfs -f -L ROOT "${DISK}2"
 fi
 
 if ! $DO_PARTITIONING; then
   log "Formatting boot partition"
-  mkfs.ext4 -F "$BOOT_PART"
+  mkfs.ext4 -F -L BOOT "$BOOT_PART"
 fi
 
 
