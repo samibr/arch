@@ -55,7 +55,6 @@ INITRAMFS="/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img"
 
 if $DO_PARTITIONING; then
   log "Wiping disk and creating new partitions..."
-  umount -R "$MOUNTPOINT" || true
   wipefs -a "$DISK"
   parted --script "$DISK" mklabel msdos
   parted --script "$DISK" mkpart primary ext4 1MiB 513MiB   # /boot
@@ -152,13 +151,6 @@ XKBMODEL="pc105"
 XKBLAYOUT="fr"
 EOL
 
-log "Creating user and setting passwords"
-useradd -m -G wheel -s /bin/bash $USERNAME
-echo "$USERNAME:$PASSWORD" | chpasswd
-echo "root:$PASSWORD" | chpasswd
-
-log "Enabling sudo for wheel group"
-sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
 
 log "Generating initramfs"
 mkinitcpio -c /etc/mkinitcpio.conf -g /boot/initramfs-linux.img
@@ -196,7 +188,27 @@ cat > /etc/systemd/zram-generator.conf <<-EOL
 zram-size = min(ram / 2, 8192)
 EOL
 
-log "Creating mail directories"
+
+log "Removing liveuser"
+if id liveuser &>/dev/null; then
+  userdel -rf liveuser 2>/dev/null || true
+fi
+
+
+
+log "Creating user and setting passwords"
+groupadd -g 1000 "$USERNAME"
+useradd -m -u 1000 -g 1000 -G wheel docker audio video -s /bin/bash "$USERNAME"
+echo "$USERNAME:$PASSWORD" | chpasswd
+echo "root:$PASSWORD" | chpasswd
+
+log "Enabling sudo for wheel group"
+sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+
+
+
+
+log "Creating some directories"
 for provider in gmail zoho; do
   for d in accounts bodies cache certificates headers private tmp; do
     mkdir -p /home/"$USERNAME"/.local/share/mutt/"\$provider"/"\$d"
@@ -204,10 +216,6 @@ for provider in gmail zoho; do
 done
 mkdir -p /home/"$USERNAME"/ScanTailor
 
-log "Cleaning up system"
-if id liveuser &>/dev/null; then
-  userdel -rf liveuser 2>/dev/null || true
-fi
 rm /usr/share/wayland-sessions/xfce-wayland.desktop
 chown -R "$USERNAME:$USERNAME" /home/"$USERNAME"
 chown -R "$USERNAME:$USERNAME" /data
