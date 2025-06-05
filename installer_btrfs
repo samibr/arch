@@ -198,7 +198,7 @@ fi
 
 log "Creating user and setting passwords"
 groupadd -g 1000 "$USERNAME"
-useradd -m -u 1000 -g 1000 -G wheel docker audio video -s /bin/bash "$USERNAME"
+useradd -m -u 1000 -g 1000 -G wheel,docker,audio,video -s /bin/bash "$USERNAME"
 echo "$USERNAME:$PASSWORD" | chpasswd
 echo "root:$PASSWORD" | chpasswd
 
