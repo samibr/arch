@@ -95,7 +95,7 @@ unsquashfs -d "$MOUNTPOINT" "$SQUASHFS"
 mkdir -p "$MOUNTPOINT/home" "$MOUNTPOINT/data" "$MOUNTPOINT/boot"
 mount -o compress=zstd,subvol=@home "$ROOT_PART" "$MOUNTPOINT/home"
 mount -o compress=zstd,subvol=@data "$ROOT_PART" "$MOUNTPOINT/data"
-
+mount "$EFI_PART" "$MOUNTPOINT/boot"
 
 cp "$VMLINUZ" "$INITRAMFS" "$MOUNTPOINT/boot"
 
