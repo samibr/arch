@@ -182,7 +182,7 @@ if id liveuser &>/dev/null; then
 fi
 
 log "Creating user and setting passwords"
-useradd -m -u 1000 -g 1000 -G wheel,docker,audio,video -s /bin/bash "$USERNAME"
+useradd -m -G wheel,docker,audio,video -s /bin/bash "$USERNAME"
 echo "$USERNAME:$PASSWORD" | chpasswd
 echo "root:$PASSWORD" | chpasswd
 
