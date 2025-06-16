@@ -23,7 +23,7 @@ USERNAME="chahd"
 PASSWORD="chahd22"
 TIMEZONE="Africa/Tunis"
 LOCALE="en_US.UTF-8"
-DO_PARTITIONING=true
+DO_PARTITIONING=false
 ENABLE_SWAPFILE=true
 SWAPFILE_SIZE="2048M"
 
@@ -54,10 +54,10 @@ INITRAMFS="/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img"
 if $DO_PARTITIONING; then
   log "Wiping disk and creating GPT partition..."
   wipefs -a "$DISK"
-parted --script "$DISK" mklabel gpt
-parted --script "$DISK" mkpart ESP fat32 1MiB 513MiB
-parted --script "$DISK" set 1 esp on
-parted --script "$DISK" mkpart primary btrfs 513MiB 100%
+  parted --script "$DISK" mklabel gpt
+  parted --script "$DISK" mkpart ESP fat32 1MiB 513MiB
+  parted --script "$DISK" set 1 esp on
+  parted --script "$DISK" mkpart primary btrfs 513MiB 100%
 
   mkfs.fat -F32 "$EFI_PART"
   mkfs.btrfs -f -L ROOT "$ROOT_PART"
@@ -92,8 +92,8 @@ mount -o compress=zstd,subvol=@ "$ROOT_PART" "$MOUNTPOINT"
 log "Extracting root filesystem from SquashFS"
 unsquashfs -d "$MOUNTPOINT" "$SQUASHFS"
 
-mkdir -p "$MOUNTPOINT/home" "$MOUNTPOINT/data" "$MOUNTPOINT/boot"
 mount -o compress=zstd,subvol=@home "$ROOT_PART" "$MOUNTPOINT/home"
+mkdir -p "$MOUNTPOINT/data"
 mount -o compress=zstd,subvol=@data "$ROOT_PART" "$MOUNTPOINT/data"
 mount "$EFI_PART" "$MOUNTPOINT/boot"
 
@@ -129,14 +129,31 @@ log "Initializing pacman keyring"
 pacman-key --init
 pacman-key --populate archlinux
 
+
+log "Fixing mkinitcpio preset..."
+rm -f /etc/mkinitcpio.conf.d/archiso.conf
+cat > /etc/mkinitcpio.d/linux.preset <<EOF
+PRESETS=('default' 'fallback')
+
+ALL_kver='/boot/vmlinuz-linux'
+
+default_image='/boot/initramfs-linux.img'
+default_options=''
+
+fallback_image='/boot/initramfs-linux-fallback.img'
+fallback_options=''
+EOF
+
+
+log "Generating initramfs"
+mkinitcpio -c /etc/mkinitcpio.conf -g /boot/initramfs-linux.img
+
+
 log "Installing and configuring GRUB for UEFI"
 pacman -Sy --noconfirm grub efibootmgr
 mkdir -p /boot/EFI
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
 grub-mkconfig -o /boot/grub/grub.cfg
-
-log "Generating initramfs"
-mkinitcpio -c /etc/mkinitcpio.conf -g /boot/initramfs-linux.img
 
 log "Enabling NetworkManager"
 systemctl enable NetworkManager || true

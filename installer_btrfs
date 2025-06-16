@@ -14,7 +14,7 @@ log() {
 }
 
 # === User Settings ===
-DISK="/dev/vda"
+DISK="/dev/sda"
 BOOT_PART="${DISK}1"
 ROOT_PART="${DISK}2"
 MOUNTPOINT="/mnt"
@@ -61,8 +61,8 @@ if $DO_PARTITIONING; then
   parted --script "$DISK" mkpart primary btrfs 513MiB 100%  # /
   parted --script "$DISK" set 1 boot on
 
-  mkfs.ext4 -F -L BOOT "${DISK}1"
-  mkfs.btrfs -f -L ROOT "${DISK}2"
+  mkfs.ext4 -F -L BOOT "$BOOT_PART"
+  mkfs.btrfs -f -L ROOT "ROOT_PART"
 fi
 
 if ! $DO_PARTITIONING; then
@@ -152,6 +152,26 @@ XKBLAYOUT="fr"
 EOL
 
 
+log "Initializing pacman keyring"
+pacman-key --init
+pacman-key --populate archlinux
+
+log "Fixing mkinitcpio preset..."
+rm -f /etc/mkinitcpio.conf.d/archiso.conf
+cat > /etc/mkinitcpio.d/linux.preset <<EOF
+PRESETS=('default' 'fallback')
+
+ALL_kver='/boot/vmlinuz-linux'
+
+default_image='/boot/initramfs-linux.img'
+default_options=''
+
+fallback_image='/boot/initramfs-linux-fallback.img'
+fallback_options=''
+EOF
+
+
+
 log "Generating initramfs"
 mkinitcpio -c /etc/mkinitcpio.conf -g /boot/initramfs-linux.img
 
@@ -220,6 +240,10 @@ rm /usr/share/wayland-sessions/xfce-wayland.desktop
 chown -R "$USERNAME:$USERNAME" /home/"$USERNAME"
 chown -R "$USERNAME:$USERNAME" /data
 EOF
+
+
+
+
 
 log "Generating fstab"
 genfstab -U "$MOUNTPOINT" >> "$MOUNTPOINT/etc/fstab"
