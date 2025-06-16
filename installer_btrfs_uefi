@@ -132,7 +132,7 @@ pacman-key --populate archlinux
 
 log "Fixing mkinitcpio preset..."
 rm -f /etc/mkinitcpio.conf.d/archiso.conf
-cat > /etc/mkinitcpio.d/linux.preset <<EOF
+cat > /etc/mkinitcpio.d/linux.preset <<EOL
 PRESETS=('default' 'fallback')
 
 ALL_kver='/boot/vmlinuz-linux'
@@ -142,7 +142,7 @@ default_options=''
 
 fallback_image='/boot/initramfs-linux-fallback.img'
 fallback_options=''
-EOF
+EOL
 
 
 log "Generating initramfs"
