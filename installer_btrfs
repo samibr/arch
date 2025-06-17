@@ -207,6 +207,10 @@ useradd -m -G wheel,docker,audio,video -s /bin/bash "$USERNAME"
 echo "$USERNAME:$PASSWORD" | chpasswd
 echo "root:$PASSWORD" | chpasswd
 
+log "Setting Fish as default shell for $USERNAME and root"
+chsh -s /usr/bin/fish "$USERNAME"
+chsh -s /usr/bin/fish root
+
 log "Enabling sudo for wheel group"
 sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
 
