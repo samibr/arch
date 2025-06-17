@@ -15,8 +15,8 @@ log() {
 
 # === User Settings ===
 DISK="/dev/nvme0n1"
-ROOT_PART="${DISK}p2"
 EFI_PART="${DISK}p1"
+ROOT_PART="${DISK}p2"
 MOUNTPOINT="/mnt"
 HOSTNAME="arch"
 USERNAME="chahd"
@@ -51,15 +51,17 @@ SQUASHFS="/run/archiso/bootmnt/arch/x86_64/airootfs.sfs"
 VMLINUZ="/run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux"
 INITRAMFS="/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img"
 
+
+
 if $DO_PARTITIONING; then
-  log "Wiping disk and creating GPT partition..."
+  log "Wiping disk and creating new partitions..."
   wipefs -a "$DISK"
   parted --script "$DISK" mklabel gpt
   parted --script "$DISK" mkpart ESP fat32 1MiB 513MiB
   parted --script "$DISK" set 1 esp on
   parted --script "$DISK" mkpart primary btrfs 513MiB 100%
 
-  mkfs.fat -F32 "$EFI_PART"
+  mkfs.fat -F32 -n EFI "$EFI_PART"
   mkfs.btrfs -f -L ROOT "$ROOT_PART"
 fi
 
@@ -67,28 +69,46 @@ fi
 
 if ! $DO_PARTITIONING; then
   log "Formatting boot partition"
-  mkfs.fat -F32 "$EFI_PART"
+  mkfs.fat -F32 -n EFI "$EFI_PART"
 fi
+
+
+
 
 log "Mounting disk temporarily and creating subvolumes"
 mount "$ROOT_PART" "$MOUNTPOINT"
 
-echo "==> Deleting old subvolumes if they exist..."
-for sub in @ @home @data; do
+echo "==> Deleting @ and @home subvolumes if they exist..."
+for sub in @ @home; do
   if btrfs subvolume list "$MOUNTPOINT" | grep -q "path $sub\$"; then
     btrfs subvolume delete "$MOUNTPOINT/$sub"
   fi
 done
 
-echo "==> Creating fresh subvolumes..."
+
+echo "==> Creating fresh @ and @home subvolumes..."
 btrfs subvolume create "$MOUNTPOINT/@"
 btrfs subvolume create "$MOUNTPOINT/@home"
-btrfs subvolume create "$MOUNTPOINT/@data"
+
+# Preserve or recreate @data depending on DO_PARTITIONING
+if $DO_PARTITIONING; then
+    echo "==> Creating new @data subvolume..."
+    btrfs subvolume create "$MOUNTPOINT/@data"
+else
+    if ! btrfs subvolume list "$MOUNTPOINT" | grep -q "path @data"; then
+        echo "==> Creating @data subvolume (not found)..."
+        btrfs subvolume create "$MOUNTPOINT/@data"
+    else
+        echo "==> Keeping existing @data subvolume."
+    fi
+fi
+
 
 umount "$MOUNTPOINT"
 
 log "Mounting final subvolumes..."
 mount -o compress=zstd,subvol=@ "$ROOT_PART" "$MOUNTPOINT"
+
 log "Extracting root filesystem from SquashFS"
 unsquashfs -d "$MOUNTPOINT" "$SQUASHFS"
 
@@ -96,6 +116,13 @@ mount -o compress=zstd,subvol=@home "$ROOT_PART" "$MOUNTPOINT/home"
 mkdir -p "$MOUNTPOINT/data"
 mount -o compress=zstd,subvol=@data "$ROOT_PART" "$MOUNTPOINT/data"
 mount "$EFI_PART" "$MOUNTPOINT/boot"
+
+echo "==> Layout mounted successfully:"
+findmnt -R "$MOUNTPOINT"
+
+echo "==> Done. Root and home formatted. Data preserved unless partitioned."
+
+
 
 cp "$VMLINUZ" "$INITRAMFS" "$MOUNTPOINT/boot"
 
@@ -125,9 +152,6 @@ XKBLAYOUT="fr"
 EOL
 
 
-log "Initializing pacman keyring"
-pacman-key --init
-pacman-key --populate archlinux
 
 
 log "Fixing mkinitcpio preset..."
@@ -148,9 +172,7 @@ EOL
 log "Generating initramfs"
 mkinitcpio -c /etc/mkinitcpio.conf -g /boot/initramfs-linux.img
 
-
 log "Installing and configuring GRUB for UEFI"
-pacman -Sy --noconfirm grub efibootmgr
 mkdir -p /boot/EFI
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
 grub-mkconfig -o /boot/grub/grub.cfg

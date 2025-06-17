@@ -65,6 +65,8 @@ if $DO_PARTITIONING; then
   mkfs.btrfs -f -L ROOT "ROOT_PART"
 fi
 
+
+
 if ! $DO_PARTITIONING; then
   log "Formatting boot partition"
   mkfs.ext4 -F -L BOOT "$BOOT_PART"
@@ -77,14 +79,11 @@ log "Mounting disk temporarily and creating subvolumes"
 mount "$ROOT_PART" "$MOUNTPOINT"
 
 echo "==> Deleting @ and @home subvolumes if they exist..."
-if btrfs subvolume list "$MOUNTPOINT" | grep -q "path @\$"; then
-    btrfs subvolume delete "$MOUNTPOINT/@"
-fi
-
-if btrfs subvolume list "$MOUNTPOINT" | grep -q "path @home\$"; then
-    btrfs subvolume delete "$MOUNTPOINT/@home"
-fi
-
+for sub in @ @home; do
+  if btrfs subvolume list "$MOUNTPOINT" | grep -q "path $sub\$"; then
+    btrfs subvolume delete "$MOUNTPOINT/$sub"
+  fi
+done
 
 
 echo "==> Creating fresh @ and @home subvolumes..."
@@ -104,6 +103,7 @@ else
     fi
 fi
 
+
 umount "$MOUNTPOINT"
 
 log "Mounting final subvolumes..."
@@ -112,17 +112,17 @@ mount -o compress=zstd,subvol=@ "$ROOT_PART" "$MOUNTPOINT"
 log "Extracting root filesystem from SquashFS"
 unsquashfs -d "$MOUNTPOINT" "$SQUASHFS"
 
-
 mount -o compress=zstd,subvol=@home "$ROOT_PART" "$MOUNTPOINT/home"
 mkdir -p "$MOUNTPOINT/data"
 mount -o compress=zstd,subvol=@data "$ROOT_PART" "$MOUNTPOINT/data"
+mount "$BOOT_PART" "$MOUNTPOINT/boot"
 
 echo "==> Layout mounted successfully:"
 findmnt -R "$MOUNTPOINT"
 
 echo "==> Done. Root and home formatted. Data preserved unless partitioned."
 
-mount "$BOOT_PART" "$MOUNTPOINT/boot"
+
 
 cp "$VMLINUZ" "$INITRAMFS" "$MOUNTPOINT/boot"
 
@@ -152,13 +152,11 @@ XKBLAYOUT="fr"
 EOL
 
 
-log "Initializing pacman keyring"
-pacman-key --init
-pacman-key --populate archlinux
+
 
 log "Fixing mkinitcpio preset..."
 rm -f /etc/mkinitcpio.conf.d/archiso.conf
-cat > /etc/mkinitcpio.d/linux.preset <<EOF
+cat > /etc/mkinitcpio.d/linux.preset <<EOL
 PRESETS=('default' 'fallback')
 
 ALL_kver='/boot/vmlinuz-linux'
@@ -168,8 +166,7 @@ default_options=''
 
 fallback_image='/boot/initramfs-linux-fallback.img'
 fallback_options=''
-EOF
-
+EOL
 
 
 log "Generating initramfs"
@@ -182,25 +179,17 @@ grub-mkconfig -o /boot/grub/grub.cfg
 log "Enabling NetworkManager"
 systemctl enable NetworkManager || true
 
-
-
 if [ "$ENABLE_SWAPFILE" = true ]; then
   log "Creating swapfile"
-
   if ! grep -q swap /etc/fstab; then
-    # Disable CoW and create swapfile using dd
     touch /swapfile
     chattr +C /swapfile
-
-    # Use SWAPFILE_SIZE directly 
     dd if=/dev/zero of=/swapfile bs=1M count=${SWAPFILE_SIZE%M} status=progress
-
     chmod 600 /swapfile
     mkswap /swapfile
     swapon /swapfile
   fi
 fi
-
 
 log "Configuring ZRAM"
 cat > /etc/systemd/zram-generator.conf <<-EOL
@@ -208,25 +197,18 @@ cat > /etc/systemd/zram-generator.conf <<-EOL
 zram-size = min(ram / 2, 8192)
 EOL
 
-
 log "Removing liveuser"
 if id liveuser &>/dev/null; then
   userdel -rf liveuser 2>/dev/null || true
 fi
 
-
-
 log "Creating user and setting passwords"
-groupadd -g 1000 "$USERNAME"
-useradd -m -u 1000 -g 1000 -G wheel,docker,audio,video -s /bin/bash "$USERNAME"
+useradd -m -G wheel,docker,audio,video -s /bin/bash "$USERNAME"
 echo "$USERNAME:$PASSWORD" | chpasswd
 echo "root:$PASSWORD" | chpasswd
 
 log "Enabling sudo for wheel group"
 sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
-
-
-
 
 log "Creating some directories"
 for provider in gmail zoho; do
@@ -236,18 +218,13 @@ for provider in gmail zoho; do
 done
 mkdir -p /home/"$USERNAME"/ScanTailor
 
-rm /usr/share/wayland-sessions/xfce-wayland.desktop
+rm -f /usr/share/wayland-sessions/xfce-wayland.desktop
 chown -R "$USERNAME:$USERNAME" /home/"$USERNAME"
 chown -R "$USERNAME:$USERNAME" /data
 EOF
 
-
-
-
-
 log "Generating fstab"
 genfstab -U "$MOUNTPOINT" >> "$MOUNTPOINT/etc/fstab"
-
 
 log "Unmounting and cleaning up"
 for d in run sys proc dev; do umount -l "$MOUNTPOINT/$d" || true; done
