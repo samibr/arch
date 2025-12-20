@@ -216,11 +216,7 @@ log "Enabling sudo for wheel group"
 sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
 
 log "Creating some directories"
-for provider in gmail zoho; do
-  for d in accounts bodies cache certificates headers private tmp; do
-    mkdir -p /home/"$USERNAME"/.local/share/mutt/"\$provider"/"\$d"
-  done
-done
+crontab -u "$USERNAME" /home/"$USERNAME"/.crontab
 mkdir -p /home/"$USERNAME"/ScanTailor
 
 rm -f /usr/share/wayland-sessions/xfce-wayland.desktop
