@@ -59,6 +59,7 @@ select_disk() {
   local i=1
   local disks=()
   while IFS= read -r disk; do
+    [ -z "$disk" ] && continue
     local size=$(cat "/sys/block/$disk/size" 2>/dev/null || echo "?")
     local size_gb=$((size / 2048 / 1024))
     echo -e "  ${BOLD}${YELLOW}$i)${RESET} /dev/$disk (${size_gb} GB)"
@@ -317,7 +318,6 @@ INITRAMFS="/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img"
 if $DO_PARTITIONING; then
   log "Wiping disk and creating new partitions..."
   wipefs -a "$DISK"
-  partprobe "$DISK" || true
 
   if [ "$BOOT_MODE" = "uefi" ]; then
     parted --script "$DISK" mklabel gpt
@@ -332,12 +332,15 @@ if $DO_PARTITIONING; then
     parted --script "$DISK" mkpart primary 513MiB 100%
     mkfs.ext4 -F -L BOOT "$BOOT_PART"
   fi
+else
+  if [ "$BOOT_MODE" = "uefi" ]; then
+    log "Formatting boot partition as FAT32..."
+    mkfs.fat -F32 -n BOOT "$BOOT_PART"
+  else
+    log "Formatting boot partition as ext4..."
+    mkfs.ext4 -F -L BOOT "$BOOT_PART"
+  fi
 fi
-
-log "Waiting for partitions to be recognized by the kernel..."
-partprobe "$DISK"
-udevadm settle
-sleep 2
 
 # === Formatting root ===
 if [ "$ENABLE_CRYPT" = true ]; then
@@ -353,9 +356,14 @@ if [ "$ENABLE_CRYPT" = true ]; then
   mkfs.btrfs -f -L ROOT "$CRYPT_PATH"
   TARGET_ROOT="$CRYPT_PATH"
 else
-  TARGET_ROOT="$ROOT_PART"
-  log "Formatting root partition as btrfs..."
-  mkfs.btrfs -f -L ROOT "$ROOT_PART"
+  if $DO_PARTITIONING; then
+    TARGET_ROOT="$ROOT_PART"
+    log "Formatting root partition as btrfs..."
+    mkfs.btrfs -f -L ROOT "$ROOT_PART"
+  else
+    TARGET_ROOT="$ROOT_PART"
+    log "Using existing root partition..."
+  fi
 fi
 
 # === Btrfs subvolumes ===
@@ -440,24 +448,9 @@ XKBMODEL="pc105"
 XKBLAYOUT="fr"
 EOL
 
-log "Configuring mkinitcpio"
+log "Fixing mkinitcpio preset..."
 rm -f /etc/mkinitcpio.conf.d/archiso.conf
-
-  if [ "$ENABLE_CRYPT" = true ]; then
-    sed -i 's/^HOOKS=.*/HOOKS=(base udev modconf kms block keyboard keymap encrypt btrfs filesystems fsck)/' /etc/mkinitcpio.conf
-  else
-    sed -i 's/^HOOKS=.*/HOOKS=(base udev modconf kms block keyboard keymap btrfs filesystems fsck)/' /etc/mkinitcpio.conf
-  fi
-
-  if [[ "$DISK" == /dev/vd* ]]; then
-    echo "MODULES=(virtio_blk)" >> /etc/mkinitcpio.conf
-  elif [[ "$DISK" == /dev/nvme* ]]; then
-    echo "MODULES=(nvme)" >> /etc/mkinitcpio.conf
-  else
-    echo "MODULES=(sd_mod)" >> /etc/mkinitcpio.conf
-  fi
-
-  cat > /etc/mkinitcpio.d/linux.preset <<PRESET
+cat > /etc/mkinitcpio.d/linux.preset <<EOL
 PRESETS=('default' 'fallback')
 
 ALL_kver='/boot/vmlinuz-linux'
@@ -467,10 +460,10 @@ default_options=''
 
 fallback_image='/boot/initramfs-linux-fallback.img'
 fallback_options=''
-PRESET
+EOL
 
 log "Generating initramfs"
-mkinitcpio -c /etc/mkinitcpio.conf -p linux
+mkinitcpio -c /etc/mkinitcpio.conf -g /boot/initramfs-linux.img
 
 log "Installing and configuring GRUB"
 if [ "$BOOT_MODE" = "uefi" ]; then
