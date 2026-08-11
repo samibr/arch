@@ -47,10 +47,10 @@ detect_boot_mode() {
 
 # === List available disks ===
 list_disks() {
-  for disk in /sys/block/sd* /sys/block/nvme*n* /sys/block/vd* /sys/block/mmcblk*; do
-    [ -b "/dev/$(basename "$disk")" ] || continue
-    echo "$(basename "$disk")"
-  done
+  lsblk -dnbo NAME,SIZE,TYPE,RO 2>/dev/null | awk '
+    $3 == "disk" && $4 == "0" && $1 !~ /^(loop|ram|zram|dm-|md|sr)[0-9]*$/ {
+      printf "%s %d\n", $1, $2
+    }'
 }
 
 # === Prompt for disk ===
@@ -58,10 +58,10 @@ select_disk() {
   echo -e "${BOLD}${CYAN}Available disks:${RESET}"
   local i=1
   local disks=()
-  while IFS= read -r disk; do
+  local disk bytes size_gb
+  while read -r disk bytes; do
     [ -z "$disk" ] && continue
-    local size=$(cat "/sys/block/$disk/size" 2>/dev/null || echo "?")
-    local size_gb=$((size / 2048 / 1024))
+    size_gb=$((bytes / 1024 / 1024 / 1024))
     echo -e "  ${BOLD}${YELLOW}$i)${RESET} /dev/$disk (${size_gb} GB)"
     disks+=("/dev/$disk")
     ((i++))
@@ -70,6 +70,12 @@ select_disk() {
   if [ ${#disks[@]} -eq 0 ]; then
     error "No disks found!"
     exit 1
+  fi
+
+  if [ ${#disks[@]} -eq 1 ]; then
+    info "Automatically selected ${disks[0]}"
+    echo "${disks[0]}"
+    return
   fi
 
   local choice
@@ -285,6 +291,13 @@ if [ "$ENABLE_CRYPT" = true ]; then
   CRYPT_PATH="/dev/mapper/$CRYPT_NAME"
 fi
 
+if [ "$ENABLE_SWAPFILE" = true ]; then
+  SWAP_SIZE_MB="${SWAPFILE_SIZE%[MG]}"
+  if [[ "$SWAPFILE_SIZE" == *G ]]; then
+    SWAP_SIZE_MB=$((SWAP_SIZE_MB * 1024))
+  fi
+fi
+
 MOUNTPOINT="/mnt"
 
 # === Summary ===
@@ -323,7 +336,7 @@ if $DO_PARTITIONING; then
     parted --script "$DISK" mklabel gpt
     parted --script "$DISK" mkpart ESP fat32 1MiB 513MiB
     parted --script "$DISK" set 1 boot on
-    parted --script "$DISK" mkpart 513MiB 100%
+    parted --script "$DISK" mkpart ROOT 513MiB 100%
     mkfs.fat -F32 -n BOOT "$BOOT_PART"
   else
     parted --script "$DISK" mklabel msdos
@@ -332,6 +345,12 @@ if $DO_PARTITIONING; then
     parted --script "$DISK" mkpart primary 513MiB 100%
     mkfs.ext4 -F -L BOOT "$BOOT_PART"
   fi
+
+  partprobe "$DISK" 2>/dev/null || true
+  for _ in {1..20}; do
+    [ -b "$BOOT_PART" ] && [ -b "$ROOT_PART" ] && break
+    sleep 0.3
+  done
 else
   if [ "$BOOT_MODE" = "uefi" ]; then
     log "Formatting boot partition as FAT32..."
@@ -474,7 +493,7 @@ fi
 
 if [ "$ENABLE_CRYPT" = true ]; then
   cryptdevice="${ROOT_PART}:${CRYPT_NAME}:allow-discards"
-  sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"cryptdevice=${cryptdevice}\"|" /etc/default/grub
+  sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"cryptdevice=\${cryptdevice}\"|" /etc/default/grub
 fi
 
 grub-mkconfig -o /boot/grub/grub.cfg
@@ -485,13 +504,9 @@ systemctl enable NetworkManager || true
 if [ "$ENABLE_SWAPFILE" = true ]; then
   log "Creating swapfile"
   if ! grep -q swap /etc/fstab; then
-    swap_size_mb="${SWAPFILE_SIZE%[MG]}"
-    if [[ "$SWAPFILE_SIZE" == *G ]]; then
-      swap_size_mb=$((swap_size_mb * 1024))
-    fi
     touch /swapfile
     chattr +C /swapfile
-    dd if=/dev/zero of=/swapfile bs=1M count="$swap_size_mb" status=progress
+    dd if=/dev/zero of=/swapfile bs=1M count="$SWAP_SIZE_MB" status=progress
     chmod 600 /swapfile
     mkswap /swapfile
     swapon /swapfile
