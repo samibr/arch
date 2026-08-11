@@ -1,0 +1,549 @@
+#!/bin/bash
+set -euo pipefail
+
+# === Styling ===
+BOLD='\e[1m'
+GREEN='\e[92m'
+RED='\e[91m'
+YELLOW='\e[93m'
+BLUE='\e[94m'
+CYAN='\e[96m'
+RESET='\e[0m'
+
+log() {
+  echo -e "${BOLD}${YELLOW}[*] $1${RESET}"
+}
+
+info() {
+  echo -e "${BOLD}${BLUE}[i] $1${RESET}"
+}
+
+warn() {
+  echo -e "${BOLD}${CYAN}[!] $1${RESET}"
+}
+
+error() {
+  echo -e "${BOLD}${RED}[x] $1${RESET}"
+}
+
+# === Virtualization Detection ===
+detect_vm() {
+  if systemd-detect-virt &>/dev/null; then
+    VIRT=$(systemd-detect-virt)
+    echo "vm"
+  else
+    echo "physical"
+  fi
+}
+
+# === UEFI/BIOS Detection ===
+detect_boot_mode() {
+  if [ -d /sys/firmware/efi ]; then
+    echo "uefi"
+  else
+    echo "bios"
+  fi
+}
+
+# === List available disks ===
+list_disks() {
+  for disk in /sys/block/sd* /sys/block/nvme*n* /sys/block/vd* /sys/block/mmcblk*; do
+    [ -b "/dev/$(basename "$disk")" ] || continue
+    echo "$(basename "$disk")"
+  done
+}
+
+# === Prompt for disk ===
+select_disk() {
+  echo -e "${BOLD}${CYAN}Available disks:${RESET}"
+  local i=1
+  local disks=()
+  while IFS= read -r disk; do
+    local size=$(cat "/sys/block/$disk/size" 2>/dev/null || echo "?")
+    local size_gb=$((size / 2048 / 1024))
+    echo -e "  ${BOLD}${YELLOW}$i)${RESET} /dev/$disk (${size_gb} GB)"
+    disks+=("/dev/$disk")
+    ((i++))
+  done < <(list_disks)
+
+  if [ ${#disks[@]} -eq 0 ]; then
+    error "No disks found!"
+    exit 1
+  fi
+
+  local choice
+  while true; do
+    read -rp "$(echo -e ${BOLD}${GREEN}"Select disk by number: "${RESET})" choice
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#disks[@]} ]; then
+      echo "${disks[$((choice-1))]}"
+      return
+    else
+      error "Invalid selection. Try again."
+    fi
+  done
+}
+
+# === Ask yes/no ===
+ask_yes_no() {
+  local prompt="$1"
+  local default="${2:-no}"
+  local reply
+  while true; do
+    if [ "$default" = "yes" ]; then
+      read -rp "$(echo -e ${BOLD}${GREEN}"$prompt (Y/n): "${RESET})" reply
+      reply="${reply:-y}"
+    else
+      read -rp "$(echo -e ${BOLD}${GREEN}"$prompt (y/N): "${RESET})" reply
+      reply="${reply:-n}"
+    fi
+    case "$reply" in
+      [Yy]|[Yy][Ee][Ss]) return 0 ;;
+      [Nn]|[Nn][Oo]) return 1 ;;
+      *) error "Please answer yes or no." ;;
+    esac
+  done
+}
+
+# === Ask for password (hidden input) ===
+ask_password() {
+  local prompt="$1"
+  local default="$2"
+  local password
+  local confirm
+  while true; do
+    read -rsp "$(echo -e ${BOLD}${GREEN}"$prompt [$default]: "${RESET})" password
+    echo
+    if [ -z "$password" ]; then
+      password="$default"
+    fi
+    read -rsp "$(echo -e ${BOLD}${YELLOW}"Confirm password: "${RESET})" confirm
+    echo
+    if [ "$password" = "$confirm" ]; then
+      if [ -z "$password" ]; then
+        error "Password cannot be empty."
+      else
+        echo "$password"
+        return
+      fi
+    else
+      error "Passwords do not match. Try again."
+    fi
+  done
+}
+
+# === Ask for hostname ===
+ask_hostname() {
+  local input
+  read -rp "$(echo -e ${BOLD}${GREEN}"Enter hostname [arch]: "${RESET})" input
+  if [[ "$input" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]; then
+    echo "$input"
+  else
+    if [ -z "$input" ]; then
+      echo "arch"
+    else
+      error "Invalid hostname. Using default 'arch'."
+      echo "arch"
+    fi
+  fi
+}
+
+# === Ask for username ===
+ask_username() {
+  local input
+  read -rp "$(echo -e ${BOLD}${GREEN}"Enter username [sami]: "${RESET})" input
+  if [[ "$input" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+    echo "$input"
+  else
+    if [ -z "$input" ]; then
+      echo "sami"
+    else
+      error "Invalid username. Using default 'sami'."
+      echo "sami"
+    fi
+  fi
+}
+
+# === Ask for timezone ===
+ask_timezone() {
+  local input
+  read -rp "$(echo -e ${BOLD}${GREEN}"Enter timezone [Africa/Tunis]: "${RESET})" input
+  if [ -z "$input" ]; then
+    echo "Africa/Tunis"
+  elif [ -f "/usr/share/zoneinfo/$input" ]; then
+    echo "$input"
+  else
+    error "Timezone not found. Using default 'Africa/Tunis'."
+    echo "Africa/Tunis"
+  fi
+}
+
+# === Ask for locale ===
+ask_locale() {
+  local input
+  read -rp "$(echo -e ${BOLD}${GREEN}"Enter locale [en_US.UTF-8]: "${RESET})" input
+  if [ -z "$input" ]; then
+    echo "en_US.UTF-8"
+  elif locale -a 2>/dev/null | grep -q "^${input}$"; then
+    echo "$input"
+  else
+    error "Locale not found. Using default 'en_US.UTF-8'."
+    echo "en_US.UTF-8"
+  fi
+}
+
+# === Ask for swapfile size ===
+ask_swapfile_size() {
+  local input
+  read -rp "$(echo -e ${BOLD}${GREEN}"Enter swapfile size [2G]: "${RESET})" input
+  if [[ "$input" =~ ^[0-9]+[MG]$ ]]; then
+    echo "$input"
+  else
+    if [ -z "$input" ]; then
+      echo "2G"
+    else
+      error "Invalid size. Using default '2G'."
+      echo "2G"
+    fi
+  fi
+}
+
+# === Main ===
+echo -e "${BOLD}${GREEN}========================================${RESET}"
+echo -e "${BOLD}${GREEN}   SBROS Interactive Installer (btrfs)   ${RESET}"
+echo -e "${BOLD}${GREEN}========================================${RESET}"
+echo
+
+VM_TYPE=$(detect_vm)
+BOOT_MODE=$(detect_boot_mode)
+
+info "Detected environment: ${BOLD}${YELLOW}$VM_TYPE${RESET}"
+info "Detected boot mode: ${BOLD}${YELLOW}$BOOT_MODE${RESET}"
+
+if [ "$VM_TYPE" = "vm" ]; then
+  warn "Running inside a virtual machine."
+else
+  info "Running on physical hardware."
+fi
+
+if [ "$BOOT_MODE" = "uefi" ]; then
+  info "UEFI boot detected. Will use GPT partition table."
+else
+  info "BIOS/Legacy boot detected. Will use MBR partition table."
+fi
+
+echo
+
+# === Interactive Prompts ===
+DISK=$(select_disk)
+info "Selected disk: ${BOLD}${YELLOW}$DISK${RESET}"
+
+if ask_yes_no "Do you want to partition and format the disk?" "no"; then
+  DO_PARTITIONING=true
+else
+  DO_PARTITIONING=false
+fi
+
+if ask_yes_no "Enable LUKS encryption on root partition?" "no"; then
+  ENABLE_CRYPT=true
+else
+  ENABLE_CRYPT=false
+fi
+
+if ask_yes_no "Enable swapfile?" "yes"; then
+  ENABLE_SWAPFILE=true
+  SWAPFILE_SIZE=$(ask_swapfile_size)
+else
+  ENABLE_SWAPFILE=false
+  SWAPFILE_SIZE="2G"
+fi
+
+HOSTNAME=$(ask_hostname)
+USERNAME=$(ask_username)
+PASSWORD=$(ask_password "Enter password for $USERNAME and root" "sami1111")
+TIMEZONE=$(ask_timezone)
+LOCALE=$(ask_locale)
+
+# === Derived variables ===
+case "$DISK" in
+  /dev/nvme*)
+    BOOT_PART="${DISK}p1"
+    ROOT_PART="${DISK}p2"
+    ;;
+  /dev/mmcblk*)
+    BOOT_PART="${DISK}p1"
+    ROOT_PART="${DISK}p2"
+    ;;
+  *)
+    BOOT_PART="${DISK}1"
+    ROOT_PART="${DISK}2"
+    ;;
+esac
+
+if [ "$ENABLE_CRYPT" = true ]; then
+  CRYPT_NAME="cryptroot"
+  CRYPT_PATH="/dev/mapper/$CRYPT_NAME"
+fi
+
+MOUNTPOINT="/mnt"
+
+# === Summary ===
+echo
+echo -e "${BOLD}${GREEN}=== Installation Summary ===${RESET}"
+echo -e "${BOLD}${YELLOW}Disk:            ${RESET}${DISK}"
+echo -e "${BOLD}${YELLOW}Hostname:        ${RESET}${HOSTNAME}"
+echo -e "${BOLD}${YELLOW}Username:        ${RESET}${USERNAME}"
+echo -e "${BOLD}${YELLOW}Timezone:        ${RESET}${TIMEZONE}"
+echo -e "${BOLD}${YELLOW}Locale:          ${RESET}${LOCALE}"
+echo -e "${BOLD}${YELLOW}Boot Mode:       ${RESET}${BOOT_MODE}"
+echo -e "${BOLD}${YELLOW}Partitioning:    ${RESET}${DO_PARTITIONING}"
+echo -e "${BOLD}${YELLOW}Encryption:      ${RESET}${ENABLE_CRYPT}"
+echo -e "${BOLD}${YELLOW}Enable Swapfile: ${RESET}${ENABLE_SWAPFILE}"
+echo -e "${BOLD}${YELLOW}Swapfile Size:   ${RESET}${SWAPFILE_SIZE}"
+echo
+echo -e "${BOLD}${RED}WARNING: This will format and install Arch on ${DISK}${RESET}"
+echo
+
+if ! ask_yes_no "Proceed with installation?" "no"; then
+  echo -e "${BOLD}${RED}Aborting installation.${RESET}"
+  exit 1
+fi
+
+# === Paths ===
+SQUASHFS="/run/archiso/bootmnt/arch/x86_64/airootfs.sfs"
+VMLINUZ="/run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux"
+INITRAMFS="/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img"
+
+# === Partitioning ===
+if $DO_PARTITIONING; then
+  log "Wiping disk and creating new partitions..."
+  wipefs -a "$DISK"
+  partprobe "$DISK" || true
+
+  if [ "$BOOT_MODE" = "uefi" ]; then
+    parted --script "$DISK" mklabel gpt
+    parted --script "$DISK" mkpart ESP fat32 1MiB 513MiB
+    parted --script "$DISK" set 1 boot on
+    parted --script "$DISK" mkpart 513MiB 100%
+    mkfs.fat -F32 -n BOOT "$BOOT_PART"
+  else
+    parted --script "$DISK" mklabel msdos
+    parted --script "$DISK" mkpart primary ext4 1MiB 513MiB
+    parted --script "$DISK" set 1 boot on
+    parted --script "$DISK" mkpart primary 513MiB 100%
+    mkfs.ext4 -F -L BOOT "$BOOT_PART"
+  fi
+fi
+
+log "Waiting for partitions to be recognized by the kernel..."
+partprobe "$DISK"
+udevadm settle
+sleep 2
+
+# === Formatting root ===
+if [ "$ENABLE_CRYPT" = true ]; then
+  if $DO_PARTITIONING; then
+    log "Creating encrypted root partition..."
+    cryptsetup luksFormat --batch-mode --key-file /dev/stdin "$ROOT_PART" <<< "$PASSWORD"
+    cryptsetup open --type luks --key-file /dev/stdin "$ROOT_PART" "$CRYPT_NAME" <<< "$PASSWORD"
+  else
+    log "Opening existing encrypted root partition..."
+    cryptsetup open --type luks "$ROOT_PART" "$CRYPT_NAME"
+  fi
+
+  mkfs.btrfs -f -L ROOT "$CRYPT_PATH"
+  TARGET_ROOT="$CRYPT_PATH"
+else
+  TARGET_ROOT="$ROOT_PART"
+  log "Formatting root partition as btrfs..."
+  mkfs.btrfs -f -L ROOT "$ROOT_PART"
+fi
+
+# === Btrfs subvolumes ===
+log "Mounting disk temporarily and creating subvolumes"
+mount "$TARGET_ROOT" "$MOUNTPOINT"
+
+echo "==> Deleting @ and @home subvolumes if they exist..."
+for sub in @ @home; do
+  if btrfs subvolume list "$MOUNTPOINT" | grep -q "path $sub\$"; then
+    btrfs subvolume delete "$MOUNTPOINT/$sub"
+  fi
+done
+
+echo "==> Creating fresh @ and @home subvolumes..."
+btrfs subvolume create "$MOUNTPOINT/@"
+btrfs subvolume create "$MOUNTPOINT/@home"
+
+if $DO_PARTITIONING; then
+  echo "==> Creating new @data subvolume..."
+  btrfs subvolume create "$MOUNTPOINT/@data"
+else
+  if btrfs subvolume list "$MOUNTPOINT" | grep -q "path @data"; then
+    if ask_yes_no "Existing @data subvolume found. Keep it?" "yes"; then
+      echo "==> Keeping existing @data subvolume."
+    else
+      echo "==> Deleting and recreating @data subvolume..."
+      btrfs subvolume delete "$MOUNTPOINT/@data"
+      btrfs subvolume create "$MOUNTPOINT/@data"
+    fi
+  else
+    echo "==> Creating @data subvolume (not found)..."
+    btrfs subvolume create "$MOUNTPOINT/@data"
+  fi
+fi
+
+umount "$MOUNTPOINT"
+
+# === Mount final layout ===
+log "Mounting final subvolumes..."
+mount -o compress=zstd,subvol=@ "$TARGET_ROOT" "$MOUNTPOINT"
+
+log "Extracting root filesystem from SquashFS"
+unsquashfs -d "$MOUNTPOINT" "$SQUASHFS"
+
+mount -o compress=zstd,subvol=@home "$TARGET_ROOT" "$MOUNTPOINT/home"
+mkdir -p "$MOUNTPOINT/data"
+mount -o compress=zstd,subvol=@data "$TARGET_ROOT" "$MOUNTPOINT/data"
+mount "$BOOT_PART" "$MOUNTPOINT/boot"
+
+echo "==> Layout mounted successfully:"
+findmnt -R "$MOUNTPOINT"
+
+# === Kernel ===
+log "Copying kernel and initramfs"
+cp "$VMLINUZ" "$INITRAMFS" "$MOUNTPOINT/boot"
+
+# === Chroot configuration ===
+log "Preparing chroot environment"
+for d in dev proc sys run; do mount --bind /$d "$MOUNTPOINT/$d"; done
+
+log "Entering chroot and configuring system"
+arch-chroot "$MOUNTPOINT" /bin/bash -e <<EOF
+set -euo pipefail
+
+log() {
+  echo -e "${BOLD}${YELLOW}[*] \$1${RESET}"
+}
+
+log "Setting hostname"
+echo "$HOSTNAME" > /etc/hostname
+
+log "Setting timezone and locale"
+ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
+hwclock --systohc
+sed -i "s/^#\s*$LOCALE/$LOCALE/" /etc/locale.gen
+locale-gen
+echo "LANG=$LOCALE" > /etc/locale.conf
+
+log "Configuring keyboard layout"
+cat > /etc/default/keyboard <<EOL
+XKBMODEL="pc105"
+XKBLAYOUT="fr"
+EOL
+
+log "Configuring mkinitcpio"
+rm -f /etc/mkinitcpio.conf.d/archiso.conf
+
+  if [ "$ENABLE_CRYPT" = true ]; then
+    sed -i 's/^HOOKS=.*/HOOKS=(base udev modconf kms block keyboard keymap encrypt btrfs filesystems fsck)/' /etc/mkinitcpio.conf
+  else
+    sed -i 's/^HOOKS=.*/HOOKS=(base udev modconf kms block keyboard keymap btrfs filesystems fsck)/' /etc/mkinitcpio.conf
+  fi
+
+  if [[ "$DISK" == /dev/vd* ]]; then
+    echo "MODULES=(virtio_blk)" >> /etc/mkinitcpio.conf
+  elif [[ "$DISK" == /dev/nvme* ]]; then
+    echo "MODULES=(nvme)" >> /etc/mkinitcpio.conf
+  else
+    echo "MODULES=(sd_mod)" >> /etc/mkinitcpio.conf
+  fi
+
+  cat > /etc/mkinitcpio.d/linux.preset <<PRESET
+PRESETS=('default' 'fallback')
+
+ALL_kver='/boot/vmlinuz-linux'
+
+default_image='/boot/initramfs-linux.img'
+default_options=''
+
+fallback_image='/boot/initramfs-linux-fallback.img'
+fallback_options=''
+PRESET
+
+log "Generating initramfs"
+mkinitcpio -c /etc/mkinitcpio.conf -p linux
+
+log "Installing and configuring GRUB"
+if [ "$BOOT_MODE" = "uefi" ]; then
+  grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB --recheck
+else
+  grub-install --target=i386-pc --recheck "$DISK"
+fi
+
+if [ "$ENABLE_CRYPT" = true ]; then
+  cryptdevice="${ROOT_PART}:${CRYPT_NAME}:allow-discards"
+  sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"cryptdevice=${cryptdevice}\"|" /etc/default/grub
+fi
+
+grub-mkconfig -o /boot/grub/grub.cfg
+
+log "Enabling NetworkManager"
+systemctl enable NetworkManager || true
+
+if [ "$ENABLE_SWAPFILE" = true ]; then
+  log "Creating swapfile"
+  if ! grep -q swap /etc/fstab; then
+    swap_size_mb="${SWAPFILE_SIZE%[MG]}"
+    if [[ "$SWAPFILE_SIZE" == *G ]]; then
+      swap_size_mb=$((swap_size_mb * 1024))
+    fi
+    touch /swapfile
+    chattr +C /swapfile
+    dd if=/dev/zero of=/swapfile bs=1M count="$swap_size_mb" status=progress
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+  fi
+fi
+
+log "Configuring ZRAM"
+cat > /etc/systemd/zram-generator.conf <<-EOL
+[zram0]
+zram-size = min(ram / 2, 8192)
+EOL
+
+log "Removing liveuser"
+if id liveuser &>/dev/null; then
+  userdel -rf liveuser 2>/dev/null || true
+fi
+
+log "Creating user and setting passwords"
+useradd -m -G wheel,docker,audio,video -s /bin/bash "$USERNAME"
+echo "$USERNAME:$PASSWORD" | chpasswd
+echo "root:$PASSWORD" | chpasswd
+
+log "Setting Fish as default shell for $USERNAME"
+chsh -s /usr/bin/fish "$USERNAME"
+
+log "Enabling sudo for wheel group"
+sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+
+log "Creating user directories"
+mkdir -p /home/$USERNAME/ScanTailor
+chown -R $USERNAME:$USERNAME /home/$USERNAME
+chown $USERNAME:$USERNAME /data
+
+rm -f /usr/share/wayland-sessions/xfce-wayland.desktop
+EOF
+
+log "Generating fstab"
+genfstab -U "$MOUNTPOINT" >> "$MOUNTPOINT/etc/fstab"
+
+# === Cleanup ===
+log "Unmounting and cleaning up"
+for d in run sys proc dev; do umount -l "$MOUNTPOINT/$d" || true; done
+if [ "$ENABLE_CRYPT" = true ]; then
+  cryptsetup close "$CRYPT_NAME" || true
+fi
+umount -l "$MOUNTPOINT" || true
+
+log "Offline installation complete. Reboot and remove media."
