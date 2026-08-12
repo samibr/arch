@@ -1,5 +1,4 @@
 #!/bin/bash
-# TTTTTTT
 set -euo pipefail
 
 # === Styling ===
@@ -19,38 +18,11 @@ info() {
   echo -e "${BOLD}${BLUE}[i] $1${RESET}"
 }
 
-warn() {
-  echo -e "${BOLD}${CYAN}[!] $1${RESET}"
-}
-
 error() {
   echo -e "${BOLD}${RED}[x] $1${RESET}"
 }
 
-# === Show available disks ===
-show_disks() {
-  echo -e "${BOLD}${CYAN}Available disks:${RESET}"
-  lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,MODEL 2>/dev/null | grep -E "disk|NAME" | grep -v "loop\|ram\|zram\|dm-\|md\|sr"
-  echo
-}
-
-# === Ask for disk ===
-ask_disk() {
-  local disk
-  while true; do
-    show_disks
-    read -rp "$(echo -e ${BOLD}${GREEN}"Enter the disk to install Arch on (e.g., /dev/vda, /dev/sda): "${RESET})" disk
-    disk="${disk%/}"
-    if [ -b "$disk" ]; then
-      echo "$disk"
-      return
-    else
-      error "Disk '$disk' does not exist. Please check and try again."
-    fi
-  done
-}
-
-# === Ask yes/no ===
+# === Ask functions ===
 ask_yes_no() {
   local prompt="$1"
   local default="${2:-no}"
@@ -66,12 +38,11 @@ ask_yes_no() {
     case "$reply" in
       [Yy]|[Yy][Ee][Ss]) return 0 ;;
       [Nn]|[Nn][Oo]) return 1 ;;
-      *) error "Please answer yes or no." ;;
+      *) echo "Please answer yes or no." ;;
     esac
   done
 }
 
-# === Ask for password (hidden input) ===
 ask_password() {
   local prompt="$1"
   local default="$2"
@@ -98,146 +69,95 @@ ask_password() {
   done
 }
 
-# === Ask for hostname ===
-ask_hostname() {
-  local input
-  read -rp "$(echo -e ${BOLD}${GREEN}"Enter hostname [arch]: "${RESET})" input
-  if [[ "$input" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]; then
-    echo "$input"
-  else
-    if [ -z "$input" ]; then
-      echo "arch"
-    else
-      error "Invalid hostname. Using default 'arch'."
-      echo "arch"
-    fi
-  fi
-}
-
-# === Ask for username ===
-ask_username() {
-  local input
-  read -rp "$(echo -e ${BOLD}${GREEN}"Enter username [sami]: "${RESET})" input
-  if [[ "$input" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
-    echo "$input"
-  else
-    if [ -z "$input" ]; then
-      echo "sami"
-    else
-      error "Invalid username. Using default 'sami'."
-      echo "sami"
-    fi
-  fi
-}
-
-# === Ask for timezone ===
-ask_timezone() {
-  local input
-  read -rp "$(echo -e ${BOLD}${GREEN}"Enter timezone [Africa/Tunis]: "${RESET})" input
-  if [ -z "$input" ]; then
-    echo "Africa/Tunis"
-  elif [ -f "/usr/share/zoneinfo/$input" ]; then
-    echo "$input"
-  else
-    error "Timezone not found. Using default 'Africa/Tunis'."
-    echo "Africa/Tunis"
-  fi
-}
-
-# === Ask for locale ===
-ask_locale() {
-  local input
-  read -rp "$(echo -e ${BOLD}${GREEN}"Enter locale [en_US.UTF-8]: "${RESET})" input
-  if [ -z "$input" ]; then
-    echo "en_US.UTF-8"
-  elif locale -a 2>/dev/null | grep -q "^${input}$"; then
-    echo "$input"
-  else
-    error "Locale not found. Using default 'en_US.UTF-8'."
-    echo "en_US.UTF-8"
-  fi
-}
-
-# === Ask for swapfile size ===
-ask_swapfile_size() {
-  local input
-  read -rp "$(echo -e ${BOLD}${GREEN}"Enter swapfile size [2G]: "${RESET})" input
-  if [[ "$input" =~ ^[0-9]+[MG]$ ]]; then
-    echo "$input"
-  else
-    if [ -z "$input" ]; then
-      echo "2G"
-    else
-      error "Invalid size. Using default '2G'."
-      echo "2G"
-    fi
-  fi
-}
-
 # === Main ===
 echo -e "${BOLD}${GREEN}========================================${RESET}"
 echo -e "${BOLD}${GREEN}   SBROS Interactive Installer (btrfs)   ${RESET}"
 echo -e "${BOLD}${GREEN}========================================${RESET}"
 echo
 
-# === Interactive Prompts ===
-DISK=$(ask_disk)
-info "Selected disk: ${BOLD}${YELLOW}$DISK${RESET}"
+# === Show available disks ===
+echo -e "${BOLD}${CYAN}Available disks:${RESET}"
+lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,MODEL 2>/dev/null | grep -E "disk|NAME" | grep -v "loop\|ram\|zram\|dm-\|md\|sr"
+echo
 
-# Ask all the questions
+# === Ask for DISK ===
+while true; do
+  read -rp "$(echo -e ${BOLD}${GREEN}"Enter the disk to install Arch on (e.g., /dev/vda, /dev/sda): "${RESET})" DISK
+  DISK="${DISK%/}"
+  if [ -b "$DISK" ]; then
+    break
+  else
+    error "Disk '$DISK' does not exist. Please check and try again."
+  fi
+done
+
+# === Ask for DO_PARTITIONING ===
 if ask_yes_no "Do you want to partition and format the disk?" "no"; then
   DO_PARTITIONING=true
 else
   DO_PARTITIONING=false
 fi
 
-if ask_yes_no "Enable LUKS encryption on root partition?" "no"; then
-  ENABLE_CRYPT=true
-else
-  ENABLE_CRYPT=false
-fi
-
+# === Ask for ENABLE_SWAPFILE ===
 if ask_yes_no "Enable swapfile?" "yes"; then
   ENABLE_SWAPFILE=true
-  SWAPFILE_SIZE=$(ask_swapfile_size)
 else
   ENABLE_SWAPFILE=false
-  SWAPFILE_SIZE="2G"
 fi
 
-HOSTNAME=$(ask_hostname)
-USERNAME=$(ask_username)
+# === Ask for SWAPFILE_SIZE ===
+if [ "$ENABLE_SWAPFILE" = true ]; then
+  read -rp "$(echo -e ${BOLD}${GREEN}"Enter swapfile size [2048M]: "${RESET})" input
+  if [ -z "$input" ]; then
+    SWAPFILE_SIZE="2048M"
+  else
+    SWAPFILE_SIZE="$input"
+  fi
+else
+  SWAPFILE_SIZE="2048M"
+fi
+
+# === Ask for HOSTNAME ===
+read -rp "$(echo -e ${BOLD}${GREEN}"Enter hostname [arch]: "${RESET})" input
+if [ -z "$input" ]; then
+  HOSTNAME="arch"
+else
+  HOSTNAME="$input"
+fi
+
+# === Ask for USERNAME ===
+read -rp "$(echo -e ${BOLD}${GREEN}"Enter username [sami]: "${RESET})" input
+if [ -z "$input" ]; then
+  USERNAME="sami"
+else
+  USERNAME="$input"
+fi
+
+# === Ask for PASSWORD ===
 PASSWORD=$(ask_password "Enter password for $USERNAME and root" "sami1111")
-TIMEZONE=$(ask_timezone)
-LOCALE=$(ask_locale)
 
-# === Derived variables (SAME AS WORKING SCRIPT) ===
-case "$DISK" in
-  /dev/nvme*)
-    BOOT_PART="${DISK}p1"
-    ROOT_PART="${DISK}p2"
-    ;;
-  /dev/mmcblk*)
-    BOOT_PART="${DISK}p1"
-    ROOT_PART="${DISK}p2"
-    ;;
-  *)
-    BOOT_PART="${DISK}1"
-    ROOT_PART="${DISK}2"
-    ;;
-esac
+# === Ask for TIMEZONE ===
+read -rp "$(echo -e ${BOLD}${GREEN}"Enter timezone [Africa/Tunis]: "${RESET})" input
+if [ -z "$input" ]; then
+  TIMEZONE="Africa/Tunis"
+else
+  TIMEZONE="$input"
+fi
 
+# === Ask for LOCALE ===
+read -rp "$(echo -e ${BOLD}${GREEN}"Enter locale [en_US.UTF-8]: "${RESET})" input
+if [ -z "$input" ]; then
+  LOCALE="en_US.UTF-8"
+else
+  LOCALE="$input"
+fi
+
+# === Derived variables (EXACTLY AS WORKING SCRIPT) ===
+BOOT_PART="${DISK}1"
+ROOT_PART="${DISK}2"
 MOUNTPOINT="/mnt"
 
-# Convert swap size for dd command
-if [ "$ENABLE_SWAPFILE" = true ]; then
-  SWAP_SIZE_MB="${SWAPFILE_SIZE%[MG]}"
-  if [[ "$SWAPFILE_SIZE" == *G ]]; then
-    SWAP_SIZE_MB=$((SWAP_SIZE_MB * 1024))
-  fi
-fi
-
-# === Summary (SAME AS WORKING SCRIPT) ===
+# === Summary (EXACTLY AS WORKING SCRIPT) ===
 echo
 echo -e "${BOLD}${GREEN}=== Installation Summary ===${RESET}"
 echo -e "${BOLD}${YELLOW}Disk:            ${RESET}${DISK}"
@@ -246,24 +166,23 @@ echo -e "${BOLD}${YELLOW}Username:        ${RESET}${USERNAME}"
 echo -e "${BOLD}${YELLOW}Timezone:        ${RESET}${TIMEZONE}"
 echo -e "${BOLD}${YELLOW}Locale:          ${RESET}${LOCALE}"
 echo -e "${BOLD}${YELLOW}Partitioning:    ${RESET}${DO_PARTITIONING}"
-echo -e "${BOLD}${YELLOW}Encryption:      ${RESET}${ENABLE_CRYPT}"
 echo -e "${BOLD}${YELLOW}Enable Swapfile: ${RESET}${ENABLE_SWAPFILE}"
 echo -e "${BOLD}${YELLOW}Swapfile Size:   ${RESET}${SWAPFILE_SIZE}"
 echo
 echo -e "${BOLD}${RED}WARNING: This will format and install Arch on ${DISK}${RESET}"
 echo
 
-if ! ask_yes_no "Proceed with installation?" "no"; then
+read -rp "$(echo -e ${BOLD}${GREEN}"Proceed with installation? (yes/[no]): "${RESET})" confirm
+if [[ "$confirm" != "yes" ]]; then
   echo -e "${BOLD}${RED}Aborting installation.${RESET}"
   exit 1
 fi
 
-# === Paths (SAME AS WORKING SCRIPT) ===
+# === Everything below is EXACTLY the working script ===
 SQUASHFS="/run/archiso/bootmnt/arch/x86_64/airootfs.sfs"
 VMLINUZ="/run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux"
 INITRAMFS="/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img"
 
-# === Partitioning (EXACTLY SAME AS WORKING SCRIPT) ===
 if $DO_PARTITIONING; then
   log "Wiping disk and creating new partitions..."
   wipefs -a "$DISK"
@@ -281,7 +200,6 @@ if ! $DO_PARTITIONING; then
   mkfs.ext4 -F -L BOOT "$BOOT_PART"
 fi
 
-# === Btrfs subvolumes (EXACTLY SAME AS WORKING SCRIPT) ===
 log "Mounting disk temporarily and creating subvolumes"
 mount "$ROOT_PART" "$MOUNTPOINT"
 
@@ -327,13 +245,11 @@ findmnt -R "$MOUNTPOINT"
 
 echo "==> Done. Root and home formatted. Data preserved unless partitioned."
 
-# === Kernel (EXACTLY SAME AS WORKING SCRIPT) ===
 cp "$VMLINUZ" "$INITRAMFS" "$MOUNTPOINT/boot"
 
 log "Preparing chroot environment"
 for d in dev proc sys run; do mount --bind /$d "$MOUNTPOINT/$d"; done
 
-# === Chroot (EXACTLY SAME AS WORKING SCRIPT) ===
 log "Entering chroot and configuring system"
 arch-chroot "$MOUNTPOINT" /bin/bash -e <<EOF
 set -euo pipefail
@@ -387,7 +303,7 @@ if [ "$ENABLE_SWAPFILE" = true ]; then
   if ! grep -q swap /etc/fstab; then
     touch /swapfile
     chattr +C /swapfile
-    dd if=/dev/zero of=/swapfile bs=1M count=${SWAP_SIZE_MB} status=progress
+    dd if=/dev/zero of=/swapfile bs=1M count=${SWAPFILE_SIZE%M} status=progress
     chmod 600 /swapfile
     mkswap /swapfile
     swapon /swapfile
