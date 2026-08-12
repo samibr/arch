@@ -26,24 +26,6 @@ error() {
   echo -e "${BOLD}${RED}[x] $1${RESET}"
 }
 
-# === Virtualization Detection ===
-detect_vm() {
-  if systemd-detect-virt &>/dev/null; then
-    echo "vm"
-  else
-    echo "physical"
-  fi
-}
-
-# === UEFI/BIOS Detection ===
-detect_boot_mode() {
-  if [ -d /sys/firmware/efi ]; then
-    echo "uefi"
-  else
-    echo "bios"
-  fi
-}
-
 # === Show available disks ===
 show_disks() {
   echo -e "${BOLD}${CYAN}Available disks:${RESET}"
@@ -57,16 +39,12 @@ ask_disk() {
   while true; do
     show_disks
     read -rp "$(echo -e ${BOLD}${GREEN}"Enter the disk to install Arch on (e.g., /dev/vda, /dev/sda): "${RESET})" disk
-    
-    # Remove trailing slash if any
     disk="${disk%/}"
-    
-    # Validate disk exists
     if [ -b "$disk" ]; then
       echo "$disk"
       return
     else
-      error "Disk '$disk' does not exist. Please check the spelling and try again."
+      error "Disk '$disk' does not exist. Please check and try again."
     fi
   done
 }
@@ -201,30 +179,11 @@ echo -e "${BOLD}${GREEN}   SBROS Interactive Installer (btrfs)   ${RESET}"
 echo -e "${BOLD}${GREEN}========================================${RESET}"
 echo
 
-VM_TYPE=$(detect_vm)
-BOOT_MODE=$(detect_boot_mode)
-
-info "Detected environment: ${BOLD}${YELLOW}$VM_TYPE${RESET}"
-info "Detected boot mode: ${BOLD}${YELLOW}$BOOT_MODE${RESET}"
-
-if [ "$VM_TYPE" = "vm" ]; then
-  warn "Running inside a virtual machine."
-else
-  info "Running on physical hardware."
-fi
-
-if [ "$BOOT_MODE" = "uefi" ]; then
-  info "UEFI boot detected. Will use GPT partition table."
-else
-  info "BIOS/Legacy boot detected. Will use MBR partition table."
-fi
-
-echo
-
 # === Interactive Prompts ===
 DISK=$(ask_disk)
 info "Selected disk: ${BOLD}${YELLOW}$DISK${RESET}"
 
+# Ask all the questions
 if ask_yes_no "Do you want to partition and format the disk?" "no"; then
   DO_PARTITIONING=true
 else
@@ -251,8 +210,7 @@ PASSWORD=$(ask_password "Enter password for $USERNAME and root" "sami1111")
 TIMEZONE=$(ask_timezone)
 LOCALE=$(ask_locale)
 
-# === Derived variables ===
-# Determine partition naming scheme
+# === Derived variables (SAME AS WORKING SCRIPT) ===
 case "$DISK" in
   /dev/nvme*)
     BOOT_PART="${DISK}p1"
@@ -268,11 +226,9 @@ case "$DISK" in
     ;;
 esac
 
-if [ "$ENABLE_CRYPT" = true ]; then
-  CRYPT_NAME="cryptroot"
-  CRYPT_PATH="/dev/mapper/$CRYPT_NAME"
-fi
+MOUNTPOINT="/mnt"
 
+# Convert swap size for dd command
 if [ "$ENABLE_SWAPFILE" = true ]; then
   SWAP_SIZE_MB="${SWAPFILE_SIZE%[MG]}"
   if [[ "$SWAPFILE_SIZE" == *G ]]; then
@@ -280,9 +236,7 @@ if [ "$ENABLE_SWAPFILE" = true ]; then
   fi
 fi
 
-MOUNTPOINT="/mnt"
-
-# === Summary ===
+# === Summary (SAME AS WORKING SCRIPT) ===
 echo
 echo -e "${BOLD}${GREEN}=== Installation Summary ===${RESET}"
 echo -e "${BOLD}${YELLOW}Disk:            ${RESET}${DISK}"
@@ -290,7 +244,6 @@ echo -e "${BOLD}${YELLOW}Hostname:        ${RESET}${HOSTNAME}"
 echo -e "${BOLD}${YELLOW}Username:        ${RESET}${USERNAME}"
 echo -e "${BOLD}${YELLOW}Timezone:        ${RESET}${TIMEZONE}"
 echo -e "${BOLD}${YELLOW}Locale:          ${RESET}${LOCALE}"
-echo -e "${BOLD}${YELLOW}Boot Mode:       ${RESET}${BOOT_MODE}"
 echo -e "${BOLD}${YELLOW}Partitioning:    ${RESET}${DO_PARTITIONING}"
 echo -e "${BOLD}${YELLOW}Encryption:      ${RESET}${ENABLE_CRYPT}"
 echo -e "${BOLD}${YELLOW}Enable Swapfile: ${RESET}${ENABLE_SWAPFILE}"
@@ -304,94 +257,32 @@ if ! ask_yes_no "Proceed with installation?" "no"; then
   exit 1
 fi
 
-# === Paths ===
+# === Paths (SAME AS WORKING SCRIPT) ===
 SQUASHFS="/run/archiso/bootmnt/arch/x86_64/airootfs.sfs"
 VMLINUZ="/run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux"
 INITRAMFS="/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img"
 
-# === Partitioning ===
+# === Partitioning (EXACTLY SAME AS WORKING SCRIPT) ===
 if $DO_PARTITIONING; then
   log "Wiping disk and creating new partitions..."
   wipefs -a "$DISK"
-  
-  if [ "$BOOT_MODE" = "uefi" ]; then
-    parted --script "$DISK" mklabel gpt
-    parted --script "$DISK" mkpart ESP fat32 1MiB 513MiB
-    parted --script "$DISK" set 1 boot on
-    parted --script "$DISK" mkpart ROOT 513MiB 100%
-  else
-    parted --script "$DISK" mklabel msdos
-    parted --script "$DISK" mkpart primary ext4 1MiB 513MiB
-    parted --script "$DISK" set 1 boot on
-    parted --script "$DISK" mkpart primary 513MiB 100%
-  fi
+  parted --script "$DISK" mklabel msdos
+  parted --script "$DISK" mkpart primary ext4 1MiB 513MiB   # /boot
+  parted --script "$DISK" mkpart primary btrfs 513MiB 100%  # /
+  parted --script "$DISK" set 1 boot on
 
-  # Force kernel to re-read partition table
-  log "Syncing partitions..."
-  sync
-  partprobe "$DISK" 2>/dev/null || true
-  udevadm settle 2>/dev/null || true
-  
-  # Wait for partitions to appear with better detection
-  log "Waiting for partitions to be detected..."
-  for i in {1..20}; do
-    if [ -b "$BOOT_PART" ] && [ -b "$ROOT_PART" ]; then
-      log "Partitions detected: $BOOT_PART and $ROOT_PART"
-      break
-    fi
-    if [ $i -eq 20 ]; then
-      error "Partitions not found after 20 seconds"
-      error "Expected: $BOOT_PART and $ROOT_PART"
-      error "Available devices:"
-      ls -la "$DISK"* 2>/dev/null || echo "No partitions found"
-      exit 1
-    fi
-    sleep 1
-  done
-
-  if [ "$BOOT_MODE" = "uefi" ]; then
-    mkfs.fat -F32 -n BOOT "$BOOT_PART"
-  else
-    mkfs.ext4 -F -L BOOT "$BOOT_PART"
-  fi
-else
-  # Only format boot partition if not doing full partitioning
-  if [ "$BOOT_MODE" = "uefi" ]; then
-    log "Formatting boot partition as FAT32..."
-    mkfs.fat -F32 -n BOOT "$BOOT_PART"
-  else
-    log "Formatting boot partition as ext4..."
-    mkfs.ext4 -F -L BOOT "$BOOT_PART"
-  fi
+  mkfs.ext4 -F -L BOOT "$BOOT_PART"
+  mkfs.btrfs -f -L ROOT "$ROOT_PART"
 fi
 
-# === Formatting root ===
-if [ "$ENABLE_CRYPT" = true ]; then
-  if $DO_PARTITIONING; then
-    log "Creating encrypted root partition..."
-    echo "$PASSWORD" | cryptsetup luksFormat --batch-mode "$ROOT_PART"
-    echo "$PASSWORD" | cryptsetup open --type luks "$ROOT_PART" "$CRYPT_NAME"
-  else
-    log "Opening existing encrypted root partition..."
-    echo "$PASSWORD" | cryptsetup open --type luks "$ROOT_PART" "$CRYPT_NAME"
-  fi
-
-  mkfs.btrfs -f -L ROOT "$CRYPT_PATH"
-  TARGET_ROOT="$CRYPT_PATH"
-else
-  if $DO_PARTITIONING; then
-    TARGET_ROOT="$ROOT_PART"
-    log "Formatting root partition as btrfs..."
-    mkfs.btrfs -f -L ROOT "$ROOT_PART"
-  else
-    TARGET_ROOT="$ROOT_PART"
-    log "Using existing root partition..."
-  fi
+if ! $DO_PARTITIONING; then
+  log "Formatting boot partition"
+  mkfs.ext4 -F -L BOOT "$BOOT_PART"
 fi
 
-# === Btrfs subvolumes ===
+# === Btrfs subvolumes (EXACTLY SAME AS WORKING SCRIPT) ===
 log "Mounting disk temporarily and creating subvolumes"
-mount "$TARGET_ROOT" "$MOUNTPOINT"
+mount "$ROOT_PART" "$MOUNTPOINT"
 
 echo "==> Deleting @ and @home subvolumes if they exist..."
 for sub in @ @home; do
@@ -404,49 +295,44 @@ echo "==> Creating fresh @ and @home subvolumes..."
 btrfs subvolume create "$MOUNTPOINT/@"
 btrfs subvolume create "$MOUNTPOINT/@home"
 
+# Preserve or recreate @data depending on DO_PARTITIONING
 if $DO_PARTITIONING; then
-  echo "==> Creating new @data subvolume..."
-  btrfs subvolume create "$MOUNTPOINT/@data"
-else
-  if btrfs subvolume list "$MOUNTPOINT" | grep -q "path @data"; then
-    if ask_yes_no "Existing @data subvolume found. Keep it?" "yes"; then
-      echo "==> Keeping existing @data subvolume."
-    else
-      echo "==> Deleting and recreating @data subvolume..."
-      btrfs subvolume delete "$MOUNTPOINT/@data"
-      btrfs subvolume create "$MOUNTPOINT/@data"
-    fi
-  else
-    echo "==> Creating @data subvolume (not found)..."
+    echo "==> Creating new @data subvolume..."
     btrfs subvolume create "$MOUNTPOINT/@data"
-  fi
+else
+    if ! btrfs subvolume list "$MOUNTPOINT" | grep -q "path @data"; then
+        echo "==> Creating @data subvolume (not found)..."
+        btrfs subvolume create "$MOUNTPOINT/@data"
+    else
+        echo "==> Keeping existing @data subvolume."
+    fi
 fi
 
 umount "$MOUNTPOINT"
 
-# === Mount final layout ===
 log "Mounting final subvolumes..."
-mount -o compress=zstd,subvol=@ "$TARGET_ROOT" "$MOUNTPOINT"
+mount -o compress=zstd,subvol=@ "$ROOT_PART" "$MOUNTPOINT"
 
 log "Extracting root filesystem from SquashFS"
 unsquashfs -d "$MOUNTPOINT" "$SQUASHFS"
 
-mount -o compress=zstd,subvol=@home "$TARGET_ROOT" "$MOUNTPOINT/home"
+mount -o compress=zstd,subvol=@home "$ROOT_PART" "$MOUNTPOINT/home"
 mkdir -p "$MOUNTPOINT/data"
-mount -o compress=zstd,subvol=@data "$TARGET_ROOT" "$MOUNTPOINT/data"
+mount -o compress=zstd,subvol=@data "$ROOT_PART" "$MOUNTPOINT/data"
 mount "$BOOT_PART" "$MOUNTPOINT/boot"
 
 echo "==> Layout mounted successfully:"
 findmnt -R "$MOUNTPOINT"
 
-# === Kernel ===
-log "Copying kernel and initramfs"
+echo "==> Done. Root and home formatted. Data preserved unless partitioned."
+
+# === Kernel (EXACTLY SAME AS WORKING SCRIPT) ===
 cp "$VMLINUZ" "$INITRAMFS" "$MOUNTPOINT/boot"
 
-# === Chroot configuration ===
 log "Preparing chroot environment"
 for d in dev proc sys run; do mount --bind /$d "$MOUNTPOINT/$d"; done
 
+# === Chroot (EXACTLY SAME AS WORKING SCRIPT) ===
 log "Entering chroot and configuring system"
 arch-chroot "$MOUNTPOINT" /bin/bash -e <<EOF
 set -euo pipefail
@@ -489,17 +375,7 @@ log "Generating initramfs"
 mkinitcpio -c /etc/mkinitcpio.conf -g /boot/initramfs-linux.img
 
 log "Installing and configuring GRUB"
-if [ "$BOOT_MODE" = "uefi" ]; then
-  grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB --recheck
-else
-  grub-install --target=i386-pc --recheck "$DISK"
-fi
-
-if [ "$ENABLE_CRYPT" = true ]; then
-  cryptdevice="${ROOT_PART}:${CRYPT_NAME}:allow-discards"
-  sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"cryptdevice=\${cryptdevice}\"|" /etc/default/grub
-fi
-
+grub-install --target=i386-pc --recheck "$DISK"
 grub-mkconfig -o /boot/grub/grub.cfg
 
 log "Enabling NetworkManager"
@@ -539,10 +415,10 @@ chsh -s /usr/bin/fish "$USERNAME"
 log "Enabling sudo for wheel group"
 sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
 
-log "Creating user directories"
-mkdir -p /home/$USERNAME/ScanTailor
-chown -R $USERNAME:$USERNAME /home/$USERNAME
-chown $USERNAME:$USERNAME /data
+log "Creating some directories"
+mkdir -p /home/"$USERNAME"/ScanTailor
+chown -R "$USERNAME:$USERNAME" /home/"$USERNAME"
+chown -R "$USERNAME:$USERNAME" /data
 
 rm -f /usr/share/wayland-sessions/xfce-wayland.desktop
 EOF
@@ -550,12 +426,8 @@ EOF
 log "Generating fstab"
 genfstab -U "$MOUNTPOINT" >> "$MOUNTPOINT/etc/fstab"
 
-# === Cleanup ===
 log "Unmounting and cleaning up"
 for d in run sys proc dev; do umount -l "$MOUNTPOINT/$d" || true; done
-if [ "$ENABLE_CRYPT" = true ]; then
-  cryptsetup close "$CRYPT_NAME" || true
-fi
 umount -l "$MOUNTPOINT" || true
 
 log "Offline installation complete. Reboot and remove media."
