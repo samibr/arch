@@ -29,7 +29,6 @@ error() {
 # === Virtualization Detection ===
 detect_vm() {
   if systemd-detect-virt &>/dev/null; then
-    VIRT=$(systemd-detect-virt)
     echo "vm"
   else
     echo "physical"
@@ -45,47 +44,30 @@ detect_boot_mode() {
   fi
 }
 
-# === List available disks ===
-list_disks() {
-  lsblk -dnbo NAME,SIZE,TYPE,RO 2>/dev/null | awk '
-    $3 == "disk" && $4 == "0" && $1 !~ /^(loop|ram|zram|dm-|md|sr)[0-9]*$/ {
-      printf "%s %d\n", $1, $2
-    }'
+# === Show available disks ===
+show_disks() {
+  echo -e "${BOLD}${CYAN}Available disks:${RESET}"
+  lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,MODEL 2>/dev/null | grep -E "^(NAME|loop|ram|zram|dm-|md|sr)" | grep -v "loop" | grep -v "ram" | grep -v "zram" | grep -v "dm-" | grep -v "md" | grep -v "sr" || lsblk
 }
 
-# === Prompt for disk ===
-select_disk() {
-  echo -e "${BOLD}${CYAN}Available disks:${RESET}"
-  local i=1
-  local disks=()
-  local disk bytes size_gb
-  while read -r disk bytes; do
-    [ -z "$disk" ] && continue
-    size_gb=$((bytes / 1024 / 1024 / 1024))
-    echo -e "  ${BOLD}${YELLOW}$i)${RESET} /dev/$disk (${size_gb} GB)"
-    disks+=("/dev/$disk")
-    ((i++))
-  done < <(list_disks)
-
-  if [ ${#disks[@]} -eq 0 ]; then
-    error "No disks found!"
-    exit 1
-  fi
-
-  if [ ${#disks[@]} -eq 1 ]; then
-    info "Automatically selected ${disks[0]}"
-    echo "${disks[0]}"
-    return
-  fi
-
-  local choice
+# === Ask for disk ===
+ask_disk() {
+  local disk
   while true; do
-    read -rp "$(echo -e ${BOLD}${GREEN}"Select disk by number: "${RESET})" choice
-    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#disks[@]} ]; then
-      echo "${disks[$((choice-1))]}"
+    echo
+    show_disks
+    echo
+    read -rp "$(echo -e ${BOLD}${GREEN}"Enter the disk to install Arch on (e.g., /dev/vda, /dev/sda): "${RESET})" disk
+    
+    # Remove trailing slash if any
+    disk="${disk%/}"
+    
+    # Validate disk exists
+    if [ -b "$disk" ]; then
+      echo "$disk"
       return
     else
-      error "Invalid selection. Try again."
+      error "Disk '$disk' does not exist. Please check the spelling and try again."
     fi
   done
 }
@@ -241,7 +223,7 @@ fi
 echo
 
 # === Interactive Prompts ===
-DISK=$(select_disk)
+DISK=$(ask_disk)
 info "Selected disk: ${BOLD}${YELLOW}$DISK${RESET}"
 
 if ask_yes_no "Do you want to partition and format the disk?" "no"; then
@@ -271,6 +253,7 @@ TIMEZONE=$(ask_timezone)
 LOCALE=$(ask_locale)
 
 # === Derived variables ===
+# Determine partition naming scheme
 case "$DISK" in
   /dev/nvme*)
     BOOT_PART="${DISK}p1"
@@ -362,6 +345,7 @@ if $DO_PARTITIONING; then
     mkfs.ext4 -F -L BOOT "$BOOT_PART"
   fi
 else
+  # Only format boot partition if not doing full partitioning
   if [ "$BOOT_MODE" = "uefi" ]; then
     log "Formatting boot partition as FAT32..."
     mkfs.fat -F32 -n BOOT "$BOOT_PART"
@@ -516,7 +500,7 @@ if [ "$ENABLE_SWAPFILE" = true ]; then
   if ! grep -q swap /etc/fstab; then
     touch /swapfile
     chattr +C /swapfile
-    dd if=/dev/zero of=/swapfile bs=1M count="$SWAP_SIZE_MB" status=progress
+    dd if=/dev/zero of=/swapfile bs=1M count=${SWAP_SIZE_MB} status=progress
     chmod 600 /swapfile
     mkswap /swapfile
     swapon /swapfile
