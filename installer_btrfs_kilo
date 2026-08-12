@@ -314,6 +314,7 @@ INITRAMFS="/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img"
 if $DO_PARTITIONING; then
   log "Wiping disk and creating new partitions..."
   wipefs -a "$DISK"
+  sleep 1
 
   if [ "$BOOT_MODE" = "uefi" ]; then
     parted --script "$DISK" mklabel gpt
@@ -327,21 +328,38 @@ if $DO_PARTITIONING; then
     parted --script "$DISK" mkpart primary 513MiB 100%
   fi
 
+  log "Waiting for partitions to be detected..."
   partprobe "$DISK" 2>/dev/null || true
   udevadm settle 2>/dev/null || true
-  for _ in {1..30}; do
-    [ -b "$BOOT_PART" ] && [ -b "$ROOT_PART" ] && break
-    sleep 0.3
+  sleep 2
+
+  # Try multiple times to find partitions
+  local found=0
+  for i in {1..15}; do
+    if [ -b "$BOOT_PART" ] && [ -b "$ROOT_PART" ]; then
+      found=1
+      break
+    fi
+    log "Waiting for partitions (attempt $i/15)..."
+    sleep 1
+    partprobe "$DISK" 2>/dev/null || true
+    udevadm settle 2>/dev/null || true
   done
 
-  if [ ! -b "$BOOT_PART" ] || [ ! -b "$ROOT_PART" ]; then
-    error "Partition nodes $BOOT_PART / $ROOT_PART not found after partitioning."
+  if [ $found -eq 0 ]; then
+    error "Partition nodes not found: $BOOT_PART and/or $ROOT_PART"
+    error "Available block devices on $DISK:"
+    ls -la "$DISK"* 2>/dev/null || echo "No partitions found"
     exit 1
   fi
 
+  log "Partitions found: $BOOT_PART and $ROOT_PART"
+  
   if [ "$BOOT_MODE" = "uefi" ]; then
+    log "Formatting boot partition as FAT32..."
     mkfs.fat -F32 -n BOOT "$BOOT_PART"
   else
+    log "Formatting boot partition as ext4..."
     mkfs.ext4 -F -L BOOT "$BOOT_PART"
   fi
 else
