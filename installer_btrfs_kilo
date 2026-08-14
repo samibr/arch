@@ -135,6 +135,7 @@ fi
 
 # === Ask for PASSWORD ===
 PASSWORD=$(ask_password "Enter password for $USERNAME and root" "sami1111")
+export PASSWORD
 
 # === Ask for TIMEZONE ===
 read -rp "$(echo -e ${BOLD}${GREEN}"Enter timezone [Africa/Tunis]: "${RESET})" input
