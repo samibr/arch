@@ -1,0 +1,539 @@
+#!/bin/bash
+set -euo pipefail
+
+# === Styling ===
+BOLD='\e[1m'
+GREEN='\e[92m'
+RED='\e[91m'
+YELLOW='\e[93m'
+BLUE='\e[94m'
+CYAN='\e[96m'
+RESET='\e[0m'
+
+log() {
+  echo -e "${BOLD}${YELLOW}[*] $1${RESET}"
+}
+
+info() {
+  echo -e "${BOLD}${BLUE}[i] $1${RESET}"
+}
+
+error() {
+  echo -e "${BOLD}${RED}[x] $1${RESET}" >&2
+}
+
+# === Ask functions ===
+ask_yes_no() {
+  local prompt="$1"
+  local default="${2:-no}"
+  local reply
+  while true; do
+    if [ "$default" = "yes" ]; then
+      read -rp "$(echo -e ${BOLD}${GREEN}"$prompt (Y/n): "${RESET})" reply
+      reply="${reply:-y}"
+    else
+      read -rp "$(echo -e ${BOLD}${GREEN}"$prompt (y/N): "${RESET})" reply
+      reply="${reply:-n}"
+    fi
+    case "$reply" in
+      [Yy]|[Yy][Ee][Ss]) return 0 ;;
+      [Nn]|[Nn][Oo]) return 1 ;;
+      *) echo "Please answer yes or no." ;;
+    esac
+  done
+}
+
+ask_password() {
+  local prompt="$1"
+  local default="$2"
+  local password
+  local confirm
+  while true; do
+    read -rsp "$(echo -e ${BOLD}${GREEN}"$prompt [$default]: "${RESET})" password
+    echo >&2
+    if [ -z "$password" ]; then
+      password="$default"
+    fi
+    read -rsp "$(echo -e ${BOLD}${YELLOW}"Confirm password: "${RESET})" confirm
+    echo >&2
+    if [ "$password" = "$confirm" ]; then
+      if [ -z "$password" ]; then
+        error "Password cannot be empty."
+      else
+        echo "$password"
+        return
+      fi
+    else
+      error "Passwords do not match. Try again."
+    fi
+  done
+}
+
+# === Cleanup on exit ===
+# Unmounts anything left mounted if the install fails or is aborted.
+cleanup() {
+  local mnt="${MOUNTPOINT:-/mnt}"
+  for d in dev proc sys run home data boot; do
+    umount -l "$mnt/$d" 2>/dev/null || true
+  done
+  umount -l "$mnt" 2>/dev/null || true
+  umount -l "/tmp/data_probe" 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'cleanup; exit 1' INT TERM
+
+# === Partition selection ===
+# Lists the partitions on a disk. Auto-selects when there is only one,
+# otherwise lets the user choose by number. All messages go to stderr so
+# the selected partition path (stdout) is the only captured output.
+select_partition() {
+  local disk="$1"
+  local label="$2"
+  local -a paths=() sizes=() fstypes=() mpoints=()
+  local line i=0 choice mp
+
+  while IFS= read -r line; do
+    i=$((i+1))
+    paths[$i]="$(echo "$line" | awk '{print $1}')"
+    sizes[$i]="$(echo "$line" | awk '{print $2}')"
+    fstypes[$i]="$(echo "$line" | awk '{print $3}')"
+    mpoints[$i]="$(echo "$line" | awk '{print $4}')"
+  done < <(lsblk -rno PATH,SIZE,FSTYPE,MOUNTPOINTS "$disk" 2>/dev/null | tail -n +2)
+
+  if [ "${#paths[@]}" -eq 0 ]; then
+    error "No partitions found on $disk. Enable partitioning or create partitions first."
+    exit 1
+  fi
+
+  if [ "${#paths[@]}" -eq 1 ]; then
+    echo -e "${BOLD}${BLUE}[i] Only one partition found on $disk — auto-selecting ${paths[1]} as the $label partition.${RESET}" >&2
+    echo "${paths[1]}"
+    return 0
+  fi
+
+  echo >&2
+  echo -e "${BOLD}${BLUE}[i] Select the $label partition on $disk:${RESET}" >&2
+  for ((i = 1; i <= ${#paths[@]}; i++)); do
+    mp="${mpoints[$i]}"
+    [ -n "$mp" ] && mp=" (mounted at $mp)"
+    echo -e "  ${BOLD}${CYAN}$i${RESET}) ${paths[$i]}  ${sizes[$i]}  ${fstypes[$i]:-unknown}${mp}" >&2
+  done
+
+  while true; do
+    read -rp "$(echo -e ${BOLD}${GREEN}"Choose the $label partition [1-${#paths[@]}]: "${RESET})" choice
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#paths[@]}" ]; then
+      break
+    fi
+    error "Invalid choice. Enter a number between 1 and ${#paths[@]}."
+  done
+
+  echo "${paths[$choice]}"
+}
+
+# Returns 0 (true) if the given btrfs partition contains an @data subvolume.
+has_data_subvolume() {
+  local root_part="$1"
+  local probe_mnt="/tmp/data_probe"
+  mkdir -p "$probe_mnt"
+  if ! mount -o ro "$root_part" "$probe_mnt" 2>/dev/null; then
+    echo -e "${BOLD}${YELLOW}[!] Could not probe $root_part for @data (assuming none).${RESET}" >&2
+    return 1
+  fi
+  local found=1
+  if btrfs subvolume list "$probe_mnt" 2>/dev/null | grep -q "path @data"; then
+    found=0
+  fi
+  umount "$probe_mnt" 2>/dev/null || true
+  return $found
+}
+
+# === Main ===
+echo -e "${BOLD}${GREEN}========================================${RESET}"
+echo -e "${BOLD}${GREEN}   SBROS Interactive Installer (btrfs v2) ${RESET}"
+echo -e "${BOLD}${GREEN}========================================${RESET}"
+echo
+
+# === Firmware detection ===
+if [ -d /sys/firmware/efi ]; then
+  FIRMWARE="UEFI"
+else
+  FIRMWARE="BIOS"
+fi
+info "Detected firmware: $FIRMWARE"
+
+# === Show available disks ===
+echo -e "${BOLD}${CYAN}Available disks:${RESET}"
+lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,MODEL 2>/dev/null | grep -E "disk|NAME" | grep -v "loop\|ram\|zram\|dm-\|md\|sr"
+echo
+
+# === Ask for DISK ===
+while true; do
+  read -rp "$(echo -e ${BOLD}${GREEN}"Enter the disk to install Arch on (e.g., /dev/vda, /dev/sda): "${RESET})" DISK
+  DISK="${DISK%/}"
+  if [ -b "$DISK" ]; then
+    break
+  else
+    error "Disk '$DISK' does not exist. Please check and try again."
+  fi
+done
+
+# === Select partitions, probe @data, then ask about partitioning ===
+echo
+part_count=$(lsblk -rno PATH "$DISK" 2>/dev/null | tail -n +2 | wc -l | tr -d ' ')
+
+if [ "$part_count" -eq 0 ]; then
+  info "No partitions found on $DISK — the disk will be partitioned from scratch."
+  info "A fresh @data subvolume will be created (nothing to preserve)."
+  DO_PARTITIONING=true
+  BOOT_PART="${DISK}1"
+  ROOT_PART="${DISK}2"
+  DATA_EXISTS=false
+else
+  BOOT_PART=$(select_partition "$DISK" "boot")
+  ROOT_PART=$(select_partition "$DISK" "root")
+
+  echo
+  info "Checking $ROOT_PART for an existing @data subvolume..."
+  if has_data_subvolume "$ROOT_PART"; then
+    DATA_EXISTS=true
+    info "@data subvolume found on $ROOT_PART — it will be preserved unless you wipe the disk."
+  else
+    DATA_EXISTS=false
+    info "No @data subvolume found on $ROOT_PART — a fresh one will be created."
+  fi
+
+  echo
+  info "How re-installation works:"
+  if [ "$DATA_EXISTS" = true ]; then
+    echo -e "  ${BOLD}${CYAN}-${RESET} Answer ${BOLD}${GREEN}NO${RESET} (default): fresh install on the existing layout —"
+    echo -e "    root and home are rebuilt, your ${BOLD}${YELLOW}@data${RESET} (documents) is ${BOLD}${GREEN}preserved${RESET} untouched."
+    echo -e "  ${BOLD}${CYAN}-${RESET} Answer ${BOLD}${RED}YES${RESET}: the disk is wiped and re-partitioned —"
+    echo -e "    ${BOLD}${RED}EVERYTHING is lost, including @data${RESET}."
+  else
+    echo -e "  ${BOLD}${CYAN}-${RESET} Answer ${BOLD}${GREEN}NO${RESET} (default): fresh install on the existing layout —"
+    echo -e "    root and home are rebuilt, a ${BOLD}${YELLOW}new @data${RESET} subvolume is created."
+    echo -e "  ${BOLD}${CYAN}-${RESET} Answer ${BOLD}${RED}YES${RESET}: the disk is wiped and re-partitioned."
+  fi
+  echo
+  if ask_yes_no "Do you want to partition and format the disk? (this destroys @data)" "no"; then
+    DO_PARTITIONING=true
+    BOOT_PART="${DISK}1"
+    ROOT_PART="${DISK}2"
+  else
+    DO_PARTITIONING=false
+  fi
+fi
+
+# A reused root partition must really be btrfs
+if ! $DO_PARTITIONING; then
+  root_fs=$(lsblk -rno FSTYPE "$ROOT_PART" 2>/dev/null | head -n 1)
+  if [ "$root_fs" != "btrfs" ]; then
+    error "Root partition $ROOT_PART is ${root_fs:-unknown}, not btrfs. Pick a btrfs partition or enable partitioning."
+    exit 1
+  fi
+fi
+
+if [ "$BOOT_PART" = "$ROOT_PART" ]; then
+  info "/boot will live inside the root filesystem (boot and root share $ROOT_PART)."
+  if [ "$FIRMWARE" = "UEFI" ]; then
+    error "UEFI requires a separate ESP (/boot) partition — sharing boot with root will not boot."
+    exit 1
+  fi
+fi
+
+# === Ask for ENABLE_SWAPFILE ===
+if ask_yes_no "Enable swapfile?" "yes"; then
+  ENABLE_SWAPFILE=true
+else
+  ENABLE_SWAPFILE=false
+fi
+
+# === Ask for SWAPFILE_SIZE ===
+if [ "$ENABLE_SWAPFILE" = true ]; then
+  read -rp "$(echo -e ${BOLD}${GREEN}"Enter swapfile size [2048M]: "${RESET})" input
+  if [ -z "$input" ]; then
+    SWAPFILE_SIZE="2048M"
+  else
+    SWAPFILE_SIZE="$input"
+  fi
+else
+  SWAPFILE_SIZE="2048M"
+fi
+
+# === Ask for HOSTNAME ===
+read -rp "$(echo -e ${BOLD}${GREEN}"Enter hostname [arch]: "${RESET})" input
+if [ -z "$input" ]; then
+  HOSTNAME="arch"
+else
+  HOSTNAME="$input"
+fi
+
+# === Ask for USERNAME ===
+read -rp "$(echo -e ${BOLD}${GREEN}"Enter username [sami]: "${RESET})" input
+if [ -z "$input" ]; then
+  USERNAME="sami"
+else
+  USERNAME="$input"
+fi
+
+# === Ask for PASSWORD ===
+PASSWORD=$(ask_password "Enter password for $USERNAME and root" "sami1111")
+export PASSWORD
+
+# === Ask for TIMEZONE ===
+read -rp "$(echo -e ${BOLD}${GREEN}"Enter timezone [Africa/Tunis]: "${RESET})" input
+if [ -z "$input" ]; then
+  TIMEZONE="Africa/Tunis"
+else
+  TIMEZONE="$input"
+fi
+
+# === Ask for LOCALE ===
+read -rp "$(echo -e ${BOLD}${GREEN}"Enter locale [en_US.UTF-8]: "${RESET})" input
+if [ -z "$input" ]; then
+  LOCALE="en_US.UTF-8"
+else
+  LOCALE="$input"
+fi
+
+# === Derived variables ===
+MOUNTPOINT="/mnt"
+
+# === Summary ===
+echo
+echo -e "${BOLD}${GREEN}=== Installation Summary ===${RESET}"
+echo -e "${BOLD}${YELLOW}Disk:            ${RESET}${DISK}"
+echo -e "${BOLD}${YELLOW}Boot partition:  ${RESET}${BOOT_PART}"
+echo -e "${BOLD}${YELLOW}Root partition:  ${RESET}${ROOT_PART}"
+echo -e "${BOLD}${YELLOW}Hostname:        ${RESET}${HOSTNAME}"
+echo -e "${BOLD}${YELLOW}Username:        ${RESET}${USERNAME}"
+echo -e "${BOLD}${YELLOW}Timezone:        ${RESET}${TIMEZONE}"
+echo -e "${BOLD}${YELLOW}Locale:          ${RESET}${LOCALE}"
+echo -e "${BOLD}${YELLOW}Firmware:        ${RESET}${FIRMWARE}"
+echo -e "${BOLD}${YELLOW}Partitioning:    ${RESET}${DO_PARTITIONING}"
+echo -e "${BOLD}${YELLOW}Enable Swapfile: ${RESET}${ENABLE_SWAPFILE}"
+echo -e "${BOLD}${YELLOW}Swapfile Size:   ${RESET}${SWAPFILE_SIZE}"
+if $DO_PARTITIONING; then
+  echo -e "${BOLD}${YELLOW}@data preserved: ${RESET}${BOLD}${RED}NO — wiped${RESET}"
+elif [ "${DATA_EXISTS:-false}" = true ]; then
+  echo -e "${BOLD}${YELLOW}@data preserved: ${RESET}${BOLD}${GREEN}YES — found on ${ROOT_PART}, kept${RESET}"
+else
+  echo -e "${BOLD}${YELLOW}@data preserved: ${RESET}${BOLD}${YELLOW}none exists — will be created fresh${RESET}"
+fi
+echo
+if $DO_PARTITIONING; then
+  echo -e "${BOLD}${RED}WARNING: This will WIPE ${DISK} — root, home AND your @data documents are destroyed.${RESET}"
+elif [ "${DATA_EXISTS:-false}" = true ]; then
+  if [ "$BOOT_PART" != "$ROOT_PART" ]; then
+    echo -e "${BOLD}${RED}WARNING: Only ${BOOT_PART} (boot) is formatted. Root/home are rebuilt; @data is preserved.${RESET}"
+  else
+    echo -e "${BOLD}${RED}WARNING: No partition is formatted. Root/home are rebuilt on ${ROOT_PART}; @data is preserved.${RESET}"
+  fi
+else
+  if [ "$BOOT_PART" != "$ROOT_PART" ]; then
+    echo -e "${BOLD}${RED}WARNING: Only ${BOOT_PART} (boot) is formatted. Root/home are rebuilt; a new @data will be created.${RESET}"
+  else
+    echo -e "${BOLD}${RED}WARNING: No partition is formatted. Root/home are rebuilt on ${ROOT_PART}; a new @data will be created.${RESET}"
+  fi
+fi
+echo
+
+read -rp "$(echo -e ${BOLD}${GREEN}"Proceed with installation? (yes/[no]): "${RESET})" confirm
+if [[ "$confirm" != "yes" ]]; then
+  echo -e "${BOLD}${RED}Aborting installation.${RESET}"
+  exit 1
+fi
+
+# === Installation steps ===
+SQUASHFS="/run/archiso/bootmnt/arch/x86_64/airootfs.sfs"
+VMLINUZ="/run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux"
+INITRAMFS="/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img"
+
+if $DO_PARTITIONING; then
+  log "Wiping disk and creating new partitions ($FIRMWARE)..."
+  wipefs -a "$DISK"
+  if [ "$FIRMWARE" = "UEFI" ]; then
+    parted --script "$DISK" mklabel gpt
+    parted --script "$DISK" mkpart primary fat32 1MiB 513MiB   # ESP (/boot)
+    parted --script "$DISK" set 1 esp on
+    parted --script "$DISK" mkpart primary btrfs 513MiB 100%   # /
+    mkfs.fat -F32 -n ESP "$BOOT_PART"
+    mkfs.btrfs -f -L ROOT "$ROOT_PART"
+  else
+    parted --script "$DISK" mklabel msdos
+    parted --script "$DISK" mkpart primary ext4 1MiB 513MiB    # /boot
+    parted --script "$DISK" mkpart primary btrfs 513MiB 100%   # /
+    parted --script "$DISK" set 1 boot on
+    mkfs.ext4 -F -L BOOT "$BOOT_PART"
+    mkfs.btrfs -f -L ROOT "$ROOT_PART"
+  fi
+fi
+
+if ! $DO_PARTITIONING && [ "$BOOT_PART" != "$ROOT_PART" ]; then
+  if [ "$FIRMWARE" = "UEFI" ]; then
+    log "Formatting boot partition (ESP, FAT32)"
+    mkfs.fat -F32 -n ESP "$BOOT_PART"
+  else
+    log "Formatting boot partition"
+    mkfs.ext4 -F -L BOOT "$BOOT_PART"
+  fi
+elif ! $DO_PARTITIONING; then
+  log "Boot shares partition with root — keeping existing filesystem"
+fi
+
+log "Mounting disk temporarily and creating subvolumes"
+mount "$ROOT_PART" "$MOUNTPOINT"
+
+echo "==> Deleting @ and @home subvolumes if they exist..."
+for sub in @ @home; do
+  if btrfs subvolume list "$MOUNTPOINT" | grep -q "path $sub\$"; then
+    btrfs subvolume delete "$MOUNTPOINT/$sub"
+  fi
+done
+
+echo "==> Creating fresh @ and @home subvolumes..."
+btrfs subvolume create "$MOUNTPOINT/@"
+btrfs subvolume create "$MOUNTPOINT/@home"
+
+# @data: created fresh (wiped) when partitioning, kept intact when not
+if $DO_PARTITIONING; then
+    echo "==> Partitioning mode: creating fresh @data subvolume — previous data is gone."
+    btrfs subvolume create "$MOUNTPOINT/@data"
+else
+    if ! btrfs subvolume list "$MOUNTPOINT" | grep -q "path @data"; then
+        echo "==> Creating @data subvolume (not found)..."
+        btrfs subvolume create "$MOUNTPOINT/@data"
+    else
+        echo "==> Keeping existing @data subvolume — your documents are safe."
+    fi
+fi
+
+umount "$MOUNTPOINT"
+
+log "Mounting final subvolumes..."
+mount -o compress=zstd,subvol=@ "$ROOT_PART" "$MOUNTPOINT"
+
+log "Extracting root filesystem from SquashFS"
+unsquashfs -d "$MOUNTPOINT" "$SQUASHFS"
+
+mount -o compress=zstd,subvol=@home "$ROOT_PART" "$MOUNTPOINT/home"
+mkdir -p "$MOUNTPOINT/data"
+mount -o compress=zstd,subvol=@data "$ROOT_PART" "$MOUNTPOINT/data"
+if [ "$BOOT_PART" != "$ROOT_PART" ]; then
+  mount "$BOOT_PART" "$MOUNTPOINT/boot"
+else
+  log "/boot stays inside the root filesystem"
+fi
+
+echo "==> Layout mounted successfully:"
+findmnt -R "$MOUNTPOINT"
+
+echo "==> Done. Root and home formatted. Data preserved unless partitioned."
+
+cp "$VMLINUZ" "$INITRAMFS" "$MOUNTPOINT/boot"
+
+log "Preparing chroot environment"
+for d in dev proc sys run; do mount --bind /$d "$MOUNTPOINT/$d"; done
+
+log "Entering chroot and configuring system"
+arch-chroot "$MOUNTPOINT" /bin/bash -e <<EOF
+set -euo pipefail
+
+log() {
+  echo -e "${BOLD}${YELLOW}[*] \$1${RESET}"
+}
+
+log "Setting hostname"
+echo "$HOSTNAME" > /etc/hostname
+
+log "Setting timezone and locale"
+ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
+hwclock --systohc
+sed -i "s/^#\s*$LOCALE/$LOCALE/" /etc/locale.gen
+locale-gen
+echo "LANG=$LOCALE" > /etc/locale.conf
+
+log "Configuring keyboard layout"
+cat > /etc/default/keyboard <<EOL
+XKBMODEL="pc105"
+XKBLAYOUT="fr"
+EOL
+
+log "Fixing mkinitcpio preset..."
+rm -f /etc/mkinitcpio.conf.d/archiso.conf
+cat > /etc/mkinitcpio.d/linux.preset <<EOL
+PRESETS=('default' 'fallback')
+
+ALL_kver='/boot/vmlinuz-linux'
+
+default_image='/boot/initramfs-linux.img'
+default_options=''
+
+fallback_image='/boot/initramfs-linux-fallback.img'
+fallback_options=''
+EOL
+
+log "Generating initramfs"
+mkinitcpio -c /etc/mkinitcpio.conf -g /boot/initramfs-linux.img
+
+log "Installing and configuring GRUB ($FIRMWARE)"
+if [ "$FIRMWARE" = "UEFI" ]; then
+  grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB --removable --recheck
+else
+  grub-install --target=i386-pc --recheck "$DISK"
+fi
+grub-mkconfig -o /boot/grub/grub.cfg
+
+log "Enabling NetworkManager"
+systemctl enable NetworkManager || true
+
+if [ "$ENABLE_SWAPFILE" = true ]; then
+  log "Creating swapfile"
+  if ! grep -q swap /etc/fstab; then
+    touch /swapfile
+    chattr +C /swapfile
+    dd if=/dev/zero of=/swapfile bs=1M count=${SWAPFILE_SIZE%M} status=progress
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+  fi
+fi
+
+log "Configuring ZRAM"
+cat > /etc/systemd/zram-generator.conf <<-EOL
+[zram0]
+zram-size = min(ram / 2, 8192)
+EOL
+
+log "Removing liveuser"
+if id liveuser &>/dev/null; then
+  userdel -rf liveuser 2>/dev/null || true
+fi
+
+log "Creating user and setting passwords"
+useradd -m -G wheel,docker,audio,video -s /bin/bash "$USERNAME"
+echo "$USERNAME:\$PASSWORD" | chpasswd
+echo "root:\$PASSWORD" | chpasswd
+
+log "Setting Fish as default shell for $USERNAME"
+chsh -s /usr/bin/fish "$USERNAME"
+
+log "Enabling sudo for wheel group"
+sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+
+log "Creating some directories"
+mkdir -p /home/"$USERNAME"/ScanTailor
+chown -R "$USERNAME:$USERNAME" /home/"$USERNAME"
+chown -R "$USERNAME:$USERNAME" /data
+
+rm -f /usr/share/wayland-sessions/xfce-wayland.desktop
+EOF
+
+log "Generating fstab"
+genfstab -U "$MOUNTPOINT" >> "$MOUNTPOINT/etc/fstab"
+
+log "Unmounting and cleaning up"
+for d in run sys proc dev; do umount -l "$MOUNTPOINT/$d" || true; done
+umount -l "$MOUNTPOINT" || true
+
+log "Offline installation complete. Reboot and remove media."
