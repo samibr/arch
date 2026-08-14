@@ -323,15 +323,8 @@ fi
 
 log "Creating user and setting passwords"
 useradd -m -G wheel,docker,audio,video -s /bin/bash "$USERNAME"
-
-# Set password using chpasswd with proper input
 echo "$USERNAME:$PASSWORD" | chpasswd
 echo "root:$PASSWORD" | chpasswd
-
-# Verify passwords were set
-if ! chpasswd -e <<< "$USERNAME:!" 2>/dev/null; then
-  log "Password for $USERNAME set successfully"
-fi
 
 log "Setting Fish as default shell for $USERNAME"
 chsh -s /usr/bin/fish "$USERNAME"
